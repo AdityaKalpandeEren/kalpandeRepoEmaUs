@@ -13,7 +13,7 @@ def get_intraday_candles(symbol: str, interval_minutes: int) -> pd.DataFrame:
     """
     interval = f"{interval_minutes}m"
     ticker = yf.Ticker(symbol)
-    df = ticker.history(period="1d", interval=interval, auto_adjust=False)
+    df = ticker.history(period="5d", interval=interval, auto_adjust=False, prepost=True)
 
     if df is None or df.empty:
         raise ValueError(
