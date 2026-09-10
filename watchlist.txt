@@ -1,0 +1,24 @@
+# One Yahoo Finance ticker per line. Lines starting with # are ignored.
+#
+# NASDAQ / NYSE stocks - plain ticker:
+AAPL
+MSFT
+NVDA
+TSLA
+AMZN
+GOOGL
+META
+#
+# Indices - caret prefix (these don't have their own tradable "volume"
+# in the usual sense; Yahoo reports the aggregate volume of the
+# underlying index components, which still works fine for this bot's
+# volume-spike logic):
+^GSPC
+^IXIC
+^DJI
+#
+# Futures continuous contracts - "=F" suffix:
+ES=F
+NQ=F
+CL=F
+GC=F

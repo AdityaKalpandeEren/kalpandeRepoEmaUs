@@ -1,0 +1,42 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# --- Telegram ---
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# No exchange credentials needed - yfinance (Yahoo Finance) is free and
+# keyless. That's the main practical difference from the NSE bot: no
+# API key, no daily token refresh, nothing to rotate.
+
+# --- Strategy parameters (same logic as BTC/NSE bots) ---
+EMA_PERIOD = 20
+VOLUME_AVG_PERIOD = 20
+VOLUME_MULTIPLIER = 2.0          # signal candle volume must be > 2x the avg
+CANDLE_INTERVAL_MINUTES = 5
+RISK_REWARD_RATIO = 1.5
+MAX_RISK_PCT = 0.015             # skip signal if stop-loss implies >1.5% risk
+
+# --- VWAP retest-for-long parameters ---
+RETEST_TREND_LOOKBACK = 5        # how many prior candles to check for an established above-VWAP trend
+RETEST_MIN_CANDLES_ABOVE = 3     # at least this many of those prior candles must close above VWAP
+RETEST_TOUCH_BUFFER_PCT = 0.001  # 0.1% buffer - counts as "touching" VWAP even if it doesn't hit exactly
+
+# --- Runtime ---
+POLL_SECONDS = 60                # how often the loop checks for new candles
+SKIP_FIRST_MINUTES = 15          # ignore signals in first 15 min after market open
+
+# --- Session hours ---
+# Regular NYSE/NASDAQ trading hours. Index symbols (^GSPC, ^IXIC, ^DJI)
+# follow the same session. Futures (ES=F, NQ=F, CL=F, GC=F, ...) trade
+# nearly 24/5 on CME Globex, but this bot only scans them during the
+# core session below for simplicity and to keep the session-VWAP model
+# (which resets each session) meaningful - see README for how to widen
+# this if you want overnight futures coverage.
+MARKET_OPEN_HOUR = 9
+MARKET_OPEN_MINUTE = 30
+MARKET_CLOSE_HOUR = 16
+MARKET_CLOSE_MINUTE = 0
+MARKET_TIMEZONE = "America/New_York"   # zoneinfo handles EST/EDT (DST) automatically
