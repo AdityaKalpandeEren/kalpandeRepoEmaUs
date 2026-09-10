@@ -35,8 +35,8 @@ SKIP_FIRST_MINUTES = 15          # ignore signals in first 15 min after market o
 # core session below for simplicity and to keep the session-VWAP model
 # (which resets each session) meaningful - see README for how to widen
 # this if you want overnight futures coverage.
-MARKET_OPEN_HOUR = 9
-MARKET_OPEN_MINUTE = 30
-MARKET_CLOSE_HOUR = 16
+MARKET_OPEN_HOUR = 4
+MARKET_OPEN_MINUTE = 0
+MARKET_CLOSE_HOUR = 20
 MARKET_CLOSE_MINUTE = 0
-MARKET_TIMEZONE = "America/New_York"   # zoneinfo handles EST/EDT (DST) automatically
+MARKET_TIMEZONE = "America/New_York"    # zoneinfo handles EST/EDT (DST) automatically

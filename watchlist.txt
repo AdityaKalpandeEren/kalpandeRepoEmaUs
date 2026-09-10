@@ -1,24 +1,205 @@
-# One Yahoo Finance ticker per line. Lines starting with # are ignored.
-#
-# NASDAQ / NYSE stocks - plain ticker:
+# =========================
+# MEGA-CAP / IMPORTANT TECH
+# =========================
 AAPL
 MSFT
 NVDA
-TSLA
 AMZN
 GOOGL
 META
-#
-# Indices - caret prefix (these don't have their own tradable "volume"
-# in the usual sense; Yahoo reports the aggregate volume of the
-# underlying index components, which still works fine for this bot's
-# volume-spike logic):
+TSLA
+AVGO
+ORCL
+CRM
+ADBE
+NFLX
+AMD
+INTC
+QCOM
+MU
+
+# =========================
+# AI / SEMICONDUCTORS
+# =========================
+NVDA
+AMD
+AVGO
+TSM
+ASML
+AMAT
+LRCX
+KLAC
+MU
+ARM
+SMCI
+MRVL
+QCOM
+INTC
+TXN
+ADI
+ON
+MPWR
+NXPI
+TER
+ENTG
+WDC
+STX
+
+# =========================
+# AI SOFTWARE / PLATFORM
+# =========================
+PLTR
+AI
+SNOW
+MDB
+DDOG
+CRWD
+PANW
+NOW
+CRM
+ADBE
+ORCL
+GOOG
+GOOGL
+MSFT
+AMZN
+META
+
+# =========================
+# CLOUD / DATA CENTER / AI INFRA
+# =========================
+IREN
+NBIS
+CORZ
+CIFR
+WULF
+HUT
+CLSK
+MARA
+RIOT
+BTDR
+APLD
+VRT
+DELL
+HPE
+SMCI
+ANET
+EQIX
+DLR
+
+# =========================
+# AI POWER / ELECTRICITY
+# =========================
+BE
+VST
+CEG
+NRG
+GEV
+ETN
+PWR
+VRT
+OKLO
+SMR
+CCJ
+LEU
+
+# =========================
+# AI DATA CENTER / COMPUTE
+# =========================
+IREN
+NBIS
+WULF
+APLD
+CORZ
+CIFR
+VRT
+SMCI
+DELL
+HPE
+ANET
+MRVL
+AVGO
+
+# =========================
+# MEMORY / STORAGE
+# =========================
+MU
+WDC
+STX
+SNDK
+
+# =========================
+# ROBOTICS / AUTONOMOUS / AI
+# =========================
+TSLA
+PLTR
+SYM
+SERV
+TER
+PATH
+RXRX
+
+# =========================
+# CYBERSECURITY
+# =========================
+CRWD
+PANW
+FTNT
+ZS
+NET
+OKTA
+
+# =========================
+# CLOUD / SAAS
+# =========================
+AMZN
+MSFT
+GOOGL
+ORCL
+SNOW
+CRM
+NOW
+DDOG
+MDB
+NET
+CFLT
+ESTC
+TWLO
+SHOP
+
+# =========================
+# AI / HIGH-BETA WATCHLIST
+# =========================
+SOUN
+BBAI
+TEM
+RXRX
+AI
+PLTR
+SERV
+IONQ
+RGTI
+QBTS
+QUBT
+
+# =========================
+# IMPORTANT MARKET INDICES
+# =========================
 ^GSPC
 ^IXIC
 ^DJI
-#
-# Futures continuous contracts - "=F" suffix:
+^RUT
+^VIX
+
+# =========================
+# FUTURES
+# =========================
 ES=F
 NQ=F
+YM=F
+RTY=F
 CL=F
 GC=F
+SI=F
+HG=F
+NG=F
