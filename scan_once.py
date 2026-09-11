@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import config
 from data.yfinance_client import get_intraday_candles
-from strategy.screener import check_signal, check_vwap_retest, evaluate
+from strategy.screener import check_signal, check_vwap_retest, check_vwap_broad_TEST, evaluate
 from alerts.telegram_bot import send_alert, format_signal_message, format_retest_message
 
 MARKET_TZ = ZoneInfo(config.MARKET_TIMEZONE)
@@ -53,10 +53,15 @@ def main():
                 send_alert(format_signal_message(signal))
                 print(f">>> EMA-CROSS ALERT SENT: {symbol}")
 
-            retest = check_vwap_retest(symbol, df)
+            # retest = check_vwap_retest(symbol, df)
+            # if retest:
+            #     send_alert(format_retest_message(retest))
+            #     print(f">>> VWAP-RETEST ALERT SENT: {symbol} ({retest.aggressor})")
+            
+            retest = check_vwap_broad_TEST(symbol, df)
             if retest:
                 send_alert(format_retest_message(retest))
-                print(f">>> VWAP-RETEST ALERT SENT: {symbol} ({retest.aggressor})")
+                print(f">>> [TEST] BROAD VWAP ALERT SENT: {symbol} ({retest.aggressor})")
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
 
