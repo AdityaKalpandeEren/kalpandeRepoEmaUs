@@ -184,3 +184,54 @@ def check_vwap_retest(symbol: str, df: pd.DataFrame) -> Optional[RetestSignal]:
         aggressor=aggressor,
         candle_time=last["timestamp"],
     )
+
+
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TEST-ONLY: broad VWAP signal - fires whenever price is above VWAP
+# OR touching it, with no uptrend/bullish-candle/reclaim requirement.
+# This is intentionally loose (will fire far more often than
+# check_vwap_retest above) purely to see live volume/behavior around
+# VWAP. Uses RetestSignal / _candle_aggressor unchanged. Delete this
+# function (and its call site in scan_once.py / main.py) to revert -
+# nothing above this line was touched.
+# ═══════════════════════════════════════════════════════════════════
+def check_vwap_broad_TEST(symbol: str, df: pd.DataFrame) -> Optional[RetestSignal]:
+    if len(df) < 2:
+        return None
+
+    df = add_vwap(df)
+    last = df.iloc[-1]
+
+    if pd.isna(last["vwap"]):
+        return None
+
+    touch_buffer = last["vwap"] * config.RETEST_TOUCH_BUFFER_PCT
+    above_vwap = last["close"] > last["vwap"]
+    touching_vwap = abs(last["close"] - last["vwap"]) <= touch_buffer
+
+    if not (above_vwap or touching_vwap):
+        return None
+
+    entry = last["close"]
+    stop_loss = last["low"]
+    risk = entry - stop_loss
+    if risk <= 0:
+        return None
+
+    target = entry + risk * config.RISK_REWARD_RATIO
+    buy_volume, sell_volume, buy_share, aggressor = _candle_aggressor(last)
+
+    return RetestSignal(
+        symbol=symbol,
+        entry=round(entry, 2),
+        stop_loss=round(stop_loss, 2),
+        target=round(target, 2),
+        vwap=round(last["vwap"], 2),
+        buy_volume=round(buy_volume, 2),
+        sell_volume=round(sell_volume, 2),
+        buy_share_pct=round(buy_share * 100, 1),
+        aggressor=aggressor,
+        candle_time=last["timestamp"],
+    )

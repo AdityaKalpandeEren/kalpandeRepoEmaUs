@@ -1,11 +1,5 @@
 import pandas as pd
 import yfinance as yf
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-import config
-
-MARKET_TZ = ZoneInfo(config.MARKET_TIMEZONE)
 
 
 def get_intraday_candles(symbol: str, interval_minutes: int) -> pd.DataFrame:
@@ -14,12 +8,8 @@ def get_intraday_candles(symbol: str, interval_minutes: int) -> pd.DataFrame:
     Works for US stocks (AAPL, MSFT), indices (^GSPC, ^IXIC, ^DJI, ^VIX),
     and futures continuous contracts (ES=F, NQ=F, YM=F, CL=F, GC=F, SI=F).
     No API key required. Yahoo's intraday history is limited to the last
-    60 days for 5m/15m bars (1m bars only cover the last 7 days) -
-    period="5d" is fetched for enough candles to warm up EMA/avg-volume
-    early in the session, but the result is filtered down to just
-    today (pre-market + regular + after-hours, since prepost=True) -
-    VWAP and avg-volume need to reset every session, not accumulate
-    across the whole 5-day lookback window.
+    60 days for 5m/15m bars (1m bars only cover the last 7 days) - we
+    only ever need today's session, so `period="1d"` is always enough.
     """
     interval = f"{interval_minutes}m"
     ticker = yf.Ticker(symbol)
@@ -35,6 +25,8 @@ def get_intraday_candles(symbol: str, interval_minutes: int) -> pd.DataFrame:
         )
 
     df = df.reset_index()
+    # Intraday bars come back indexed as "Datetime"; a daily bar (if Yahoo
+    # ever falls back to one) would be "Date" instead - handle both.
     time_col = "Datetime" if "Datetime" in df.columns else "Date"
     df = df.rename(columns={
         time_col: "timestamp",
@@ -44,16 +36,6 @@ def get_intraday_candles(symbol: str, interval_minutes: int) -> pd.DataFrame:
         "Close": "close",
         "Volume": "volume",
     })
-
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    if df["timestamp"].dt.tz is None:
-        df["timestamp"] = df["timestamp"].dt.tz_localize(MARKET_TZ)
-    else:
-        df["timestamp"] = df["timestamp"].dt.tz_convert(MARKET_TZ)
-
-    today = datetime.now(MARKET_TZ).date()
-    df = df[df["timestamp"].dt.date == today].reset_index(drop=True)
-
     df = df.sort_values("timestamp").reset_index(drop=True)
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col])
