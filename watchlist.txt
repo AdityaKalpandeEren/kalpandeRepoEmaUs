@@ -128,6 +128,7 @@ MU
 WDC
 STX
 SNDK
+DRAM
 
 # =========================
 # ROBOTICS / AUTONOMOUS / AI
@@ -182,6 +183,145 @@ IONQ
 RGTI
 QBTS
 QUBT
+
+# =========================
+# NASDAQ-100 ADDITIONS (rest of the index not already above)
+# =========================
+COST
+PEP
+CSCO
+TMUS
+LIN
+INTU
+AMGN
+ISRG
+BKNG
+HON
+VRTX
+ADP
+GILD
+SBUX
+MDLZ
+REGN
+PYPL
+SNPS
+CDNS
+MELI
+MAR
+ORLY
+CTAS
+PDD
+CSX
+ABNB
+WDAY
+DXCM
+PCAR
+ROP
+MNST
+ODFL
+AEP
+EXC
+KDP
+CPRT
+FANG
+TTD
+IDXX
+XEL
+EA
+VRSK
+CCEP
+GEHC
+KHC
+CTSH
+BIIB
+TEAM
+FAST
+GFS
+ILMN
+DASH
+WBD
+LULU
+MCHP
+
+# =========================
+# AI - ADDITIONAL NAMES (infra, networking, optical, apps)
+# =========================
+APP
+ALAB
+CRDO
+COHR
+FN
+LSCC
+MTSI
+UPST
+
+# =========================
+# AI / TECH ETFs
+# =========================
+QQQ
+SPY
+DIA
+IWM
+SMH
+SOXX
+XLK
+VGT
+ARKK
+BOTZ
+ROBO
+IGV
+SKYY
+AIQ
+IYW
+FTEC
+XLC
+
+# =========================
+# SOFTWARE / IT SERVICES
+# =========================
+ADSK
+SAP
+IBM
+ACN
+EPAM
+GDDY
+HUBS
+BILL
+PCTY
+PAYC
+SPSC
+TYL
+MANH
+PTC
+VRNS
+QLYS
+TENB
+RPD
+S
+CYBR
+ZM
+DOCU
+U
+
+# =========================
+# BROADER LARGE-CAP GROWTH / "NASDAQ 500"-STYLE EXTENSION
+# (fintech, consumer internet, gig/travel - beyond the top 100/AI names above)
+# =========================
+UBER
+LYFT
+SQ
+COIN
+HOOD
+SOFI
+AFRM
+ROKU
+PINS
+SNAP
+ETSY
+EBAY
+EXPE
+TTWO
+RBLX
 
 # =========================
 # IMPORTANT MARKET INDICES
