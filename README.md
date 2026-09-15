@@ -112,6 +112,57 @@ session. If you want genuine round-the-clock futures coverage, that's
 a bigger change (continuous VWAP that doesn't reset, similar to how
 the BTC bot's rolling-window VWAP works) — ask if you want that built.
 
+## Testing accuracy: paper trading
+
+While `main.py` runs continuously, it now also opens a *virtual*
+position for every signal, tracks it forward candle by candle (fills
+on the next candle's open — not the signal candle's own close, since
+in real life you'd only see the Telegram alert after that candle
+closed), and closes it on target, stop-loss, or the 8pm ET session
+close (squared off at last price) — no real orders, no capital at
+risk. Results are logged to `paper_trades.db`.
+
+It's on by default. To turn it off, set in `.env`:
+```
+PAPER_TRADING_ENABLED=false
+```
+
+**This needs `main.py` running continuously** (your own machine, a
+free-tier VM, etc.) — not the GitHub Actions `scan_once.py` path —
+because a pending paper trade needs to still be there on the *next*
+poll to get filled and tracked; an ephemeral CI runner won't persist
+that state between runs.
+
+Generate an accuracy report anytime:
+```bash
+python -m paper_trading.generate_report
+# or a specific window
+python -m paper_trading.generate_report --from 2025-09-01 --to 2025-09-10
+```
+
+This prints a win-rate / avg-R breakdown (overall, per-strategy,
+per-symbol) and writes `paper_trading/results/paper_trading_trades_<timestamp>.csv`
+and `..._report_<timestamp>.md`. Same accounting rules as the NSE
+bot's version:
+- **Win rate (target vs stop only)** — of trades that actually
+  resolved, what % hit target.
+- **Win rate (incl. EOD as loss)** — same, but counts trades still
+  open at the session close (squared off, not stopped/targeted) as
+  losses — stricter and more conservative.
+- **Avg R per trade (expectancy)** — the number that matters for
+  whether this makes money over time: average result per trade, in
+  multiples of what you risked. Positive = profitable on average even
+  below a 50% win rate, as long as winners (capped at
+  `config.RISK_REWARD_RATIO`, 1.5R) outweigh losers (-1R) often enough.
+
+If you also want a *historical* backtest here (run the strategies
+against real past Yahoo Finance candles, like the NSE bot's
+`backtest/run_backtest.py` does against Upstox history), that's a
+straightforward addition on top of this — Yahoo's intraday history is
+more limited than Upstox's (roughly the last 7 days for 1-minute bars,
+60 days for 5/15-minute bars), but the same walk-forward simulator
+would work unchanged. Ask if you want that built too.
+
 ## Tuning the strategy
 
 Same knobs as the NSE bot, in `config.py`:
@@ -126,12 +177,17 @@ us_alert_bot/
 ├── data/yfinance_client.py    # free, keyless Yahoo Finance intraday candles
 ├── strategy/
 │   ├── indicators.py           # EMA, session VWAP, avg volume
-│   └── screener.py             # EMA-cross + VWAP-retest trigger logic
+│   ├── screener.py             # EMA-cross + VWAP-retest + VWAP-broad-test trigger logic
+│   └── trade_engine.py         # shared trade-outcome simulation (used by paper trading)
+├── paper_trading/
+│   ├── tracker.py              # live virtual-position tracking, driven by main.py's poll loop
+│   ├── report.py                # win rate / avg-R / expectancy report
+│   └── generate_report.py      # CLI: python -m paper_trading.generate_report
 ├── alerts/
 │   ├── telegram_bot.py         # sends both alert message types ($, ET)
 │   └── logger.py               # SQLite alert history
 ├── watchlist.txt
-├── main.py                     # always-on loop
+├── main.py                     # always-on loop (also drives paper trading)
 ├── scan_once.py                # single-pass scan for GitHub Actions
 ├── .github/workflows/us-alert-scan.yml
 └── .env / requirements.txt

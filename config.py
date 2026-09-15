@@ -40,3 +40,12 @@ MARKET_OPEN_MINUTE = 0
 MARKET_CLOSE_HOUR = 20
 MARKET_CLOSE_MINUTE = 0
 MARKET_TIMEZONE = "America/New_York"    # zoneinfo handles EST/EDT (DST) automatically
+
+# --- Paper trading (main.py only - see paper_trading/tracker.py) ---
+# When on, every signal main.py generates also opens a virtual position
+# that gets tracked forward (filled on the next candle's open, closed on
+# target/stop/EOD-square-off) into paper_trades.db, so you can run
+# `python -m paper_trading.generate_report` to see real accuracy without
+# risking money. Needs main.py running continuously - see that module's
+# docstring for why.
+PAPER_TRADING_ENABLED = os.getenv("PAPER_TRADING_ENABLED", "true").lower() == "true"
