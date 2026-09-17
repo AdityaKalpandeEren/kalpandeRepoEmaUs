@@ -40,3 +40,25 @@ MARKET_OPEN_MINUTE = 0
 MARKET_CLOSE_HOUR = 20
 MARKET_CLOSE_MINUTE = 0
 MARKET_TIMEZONE = "America/New_York"    # zoneinfo handles EST/EDT (DST) automatically
+
+# --- VWAP timeline ---
+# Controls WHEN "the day" starts for VWAP purposes ONLY - candle
+# fetching/scanning still starts at MARKET_OPEN_HOUR above regardless.
+#   false (default) - VWAP accumulates from the first candle of the day,
+#     which is 4:00 AM ET pre-market (see strategy/indicators.py
+#     add_vwap docstring for exactly why) - pre-market volume/price is
+#     baked into VWAP.
+#   true - VWAP instead resets at the 9:30 AM regular-session open, the
+#     "textbook" definition most traders assume VWAP means.
+VWAP_REGULAR_SESSION_ONLY = os.getenv("VWAP_REGULAR_SESSION_ONLY", "false").lower() == "true"
+REGULAR_SESSION_OPEN_HOUR = 9
+REGULAR_SESSION_OPEN_MINUTE = 30
+
+# --- Paper trading (main.py only - see paper_trading/tracker.py) ---
+# When on, every signal main.py generates also opens a virtual position
+# that gets tracked forward (filled on the next candle's open, closed on
+# target/stop/EOD-square-off) into paper_trades.db, so you can run
+# `python -m paper_trading.generate_report` to see real accuracy without
+# risking money. Needs main.py running continuously - see that module's
+# docstring for why.
+PAPER_TRADING_ENABLED = os.getenv("PAPER_TRADING_ENABLED", "true").lower() == "true"
