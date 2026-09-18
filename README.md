@@ -169,12 +169,15 @@ bug** — which is why `get_historical_candles()` now splits every range
 into small chunks (6 days for 1m bars, 15 for 5/15m, 45 for 1h),
 retries with backoff, and pauses between chunks.
 
-**Yahoo's real lookback limits** — asking for more silently returns
-fewer days, it doesn't error:
+**Yahoo's real lookback limits.** Ask for a range that starts before
+these and you get **nothing back at all** — every request prints
+`must be within the last 60 days` and returns zero candles. It is not
+rate-limiting, and retrying will not help. Verify the current limits
+for yourself anytime with step 5 of `check_data_access.py`:
 
 | Interval | History available |
 |---|---|
-| 1m | ~30 days |
+| 1m | **~7 days** (Yahoo documents 30, but really serves ~7) |
 | 2m / 5m / 15m / 30m / 90m | ~60 days |
 | 60m / 1h | ~730 days |
 
@@ -185,17 +188,27 @@ bot has: Upstox serves far deeper intraday history.)
 
 ### Running a backtest
 
+**Use `--days N` rather than explicit dates.** It's relative to today,
+so it's always inside Yahoo's retention window — picking stale dates is
+by far the most common way to get an empty backtest.
+
 ```bash
 # start small to confirm it works
-python -m backtest.run_backtest --symbols AAPL --from 2025-09-01 --to 2025-09-12
+python -m backtest.run_backtest --symbols AAPL --days 30
 
-# then widen
-python -m backtest.run_backtest --from 2025-08-15 --to 2025-09-14
+# then widen to the whole watchlist
+python -m backtest.run_backtest --days 45
 
 # one strategy only
-python -m backtest.run_backtest --symbols AAPL,MSFT \
-    --from 2025-08-15 --to 2025-09-14 --strategies VWAP_RETEST
+python -m backtest.run_backtest --symbols AAPL,MSFT --days 30 \
+    --strategies VWAP_RETEST
+
+# explicit dates work too, but must be recent
+python -m backtest.run_backtest --symbols AAPL --from 2026-08-20 --to 2026-09-16
 ```
+
+If your dates are outside the window, the script now says so up-front
+and prints the valid range instead of firing off doomed requests.
 
 It prints a trade-by-trade log, then a summary (win rate, avg R,
 expectancy — overall, per strategy, per symbol), and writes
@@ -249,7 +262,7 @@ Generate an accuracy report anytime:
 ```bash
 python -m paper_trading.generate_report
 # or a specific window
-python -m paper_trading.generate_report --from 2025-09-01 --to 2025-09-10
+python -m paper_trading.generate_report --from 2026-09-01 --to 2026-09-17
 ```
 
 This prints a win-rate / avg-R breakdown (overall, per-strategy,
@@ -320,3 +333,55 @@ across stocks/indices/futures, it's the most practical choice, but if
 you ever want a fully-documented paid alternative (Polygon.io, Alpaca,
 Databento), the `data/` layer is the only thing you'd need to swap out
 — `strategy/` and `alerts/` don't care where the candles came from.
+
+## Multi-strategy research engine
+
+Nine entry models run over the same candles, long and short, ranked by
+expectancy. Entirely separate from the live alert path — `main.py` and
+`scan_once.py` do not import any of it, and nothing under the
+"RESEARCH ENGINE" block in `config.py` affects your live alerts.
+
+```bash
+python -m backtest.run_research --symbols AAPL,MSFT,NVDA,AMZN,META,TSLA --days 45
+python -m backtest.run_research --days 45 --no-regime-filter   # what is the filter worth?
+python -m backtest.run_research --days 45 --no-costs           # what do costs cost?
+python -m backtest.run_research --days 45 --risk-sweep         # 0.25/0.5/0.75/1% sizing
+```
+
+| Model | Idea |
+|---|---|
+| A_BREAKOUT | immediate structural break |
+| B_BREAKOUT_CLOSE | break confirmed by candle close |
+| C_BREAKOUT_RETEST | break, retest, continuation |
+| D_VWAP_RECLAIM | cross back through VWAP |
+| E_VWAP_REJECTION | rejection off VWAP in trend direction |
+| F_EMA_PULLBACK | pullback to fast EMA in an EMA trend |
+| G_CONFLUENCE | EMA and VWAP agreeing as one zone |
+| H_ORB_VWAP | opening-range break + VWAP confirmation |
+| SCORE_ENGINE | weighted 6-component score |
+
+**Ranked by expectancy (R per trade), not win rate.** A 70%-win model
+risking 1R to make 0.3R loses money. The report also prints a t-stat
+and a small-sample flag per model — below t=2.0 a result is inside the
+noise band however good the win rate looks.
+
+**Regime gate.** Every trade is tagged with the regime it opened in,
+and the `NO TRADE` gate blocks neutral (chop), extreme volatility, and
+counter-trend entries. Run once with `--no-regime-filter` to measure
+what the gate is actually worth rather than assuming it helps.
+
+**Costs are on by default** (2bps slippage + 1bps commission per side).
+Zero-cost backtests are the most common way an intraday strategy looks
+profitable and then isn't.
+
+**Shorts are not mirrored longs** — wider ATR stops, a higher volume
+bar, and no entries in the opening candles. Those asymmetries are
+config values, not assertions; the report's long-vs-short slice tells
+you whether they helped.
+
+### Limits you cannot engineer around
+
+Yahoo retains ~60 days of 5-minute bars, so a run covers **one market
+period**. Nine models on one dataset means the top result is partly
+selection luck. Re-run the leaders on a different window before
+believing the ranking.

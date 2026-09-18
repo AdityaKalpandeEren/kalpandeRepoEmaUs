@@ -14,8 +14,11 @@ Usage examples (run from the us_alert_bot/ directory):
     python -m backtest.run_backtest --days 45
 
     # explicit dates work too (must be recent - see the note below)
-    python -m backtest.run_backtest --symbols AAPL,MSFT,NVDA \
+    python -m backtest.run_backtest --symbols AAPL,MSFT,NVDA \\
         --from 2026-08-20 --to 2026-09-16
+
+    python -m backtest.run_backtest --days 30 \\
+        --strategies EMA_CROSS,VWAP_RETEST
 
 Notes:
 - No API key needed - yfinance is free and keyless.
@@ -25,6 +28,10 @@ Notes:
   60 days") - it is not rate-limiting and retrying will not help.
   --days N avoids the whole problem; otherwise this script checks your
   dates up-front and tells you the valid window before fetching.
+- If a fetch fails outright (not just "no data", an actual exception)
+  and the error mentions curl_cffi, SSL/TLS, or "requires curl_cffi
+  session" - that's a yfinance dependency problem in your environment,
+  not a bug here. See README "Testing on historical data" for the fix.
 - Results are written to backtest/results/ as a CSV (every simulated
   trade) and a Markdown summary report.
 """
@@ -40,6 +47,8 @@ from paper_trading.report import write_report, print_summary
 # Yahoo's hard intraday retention limits. Asking for anything older than
 # this returns NOTHING (with a "must be within the last N days" notice
 # per request) - it is not a rate-limit and not something retries fix.
+# Checked up-front by _preflight_dates() so you find out before firing
+# off hundreds of doomed requests.
 _MAX_LOOKBACK_DAYS = {1: 7, 2: 60, 5: 60, 15: 60, 30: 60, 60: 730, 90: 60}
 
 
