@@ -61,7 +61,10 @@ def parse_args():
     p.add_argument("--interval", type=int, default=config.CANDLE_INTERVAL_MINUTES)
     p.add_argument("--strategies", default=",".join(ENTRY_MODELS),
                     help="Comma-separated subset of the model names above")
-    p.add_argument("--directions", default="long,short", help="long | short | long,short")
+    p.add_argument("--directions", default="long",
+                    help="long | short | long,short (default: long - this version "
+                         "trades cash equity, no shorting; pass long,short to still "
+                         "compare the short-side models)")
     p.add_argument("--no-regime-filter", action="store_true",
                     help="Disable the NO-TRADE regime gate, to measure what it's worth")
     p.add_argument("--no-costs", action="store_true",

@@ -75,6 +75,43 @@ PAPER_TRADING_ENABLED = os.getenv("PAPER_TRADING_ENABLED", "true").lower() == "t
 EMA_FAST = 9
 EMA_SLOW = 21
 
+# --- EMA stack breakout model (I) - 10/20/50, long only ---
+# Separate from EMA_FAST/EMA_SLOW above (9/21, used by the regime
+# classifier and the scoring engine) - this is the specific 10/20/50
+# ribbon the user already reads by eye on their charts.
+EMA_STACK_FAST = 10
+EMA_STACK_MID = 20
+EMA_STACK_SLOW = 50
+EMA_STACK_MIN_RVOL = 1.2         # a breakout wants real volume behind it -
+                                  # unlike a VWAP touch/test, this is the one
+                                  # place high volume is being read as
+                                  # confirmation, not climax exhaustion
+EMA_STACK_MAX_EXTENSION_ATR = 3.0  # skip breakouts already this many ATRs
+                                    # above the 50 EMA - chasing an extended
+                                    # move rather than catching a fresh one
+
+# --- J: VWAP standard-deviation band reversion (long only) ---
+# From a cited QuantConnect study (100 liquid NASDAQ names): buying at
+# the lower 2-SD VWAP band showed ~61% win rate at ~1.4:1 R:R, and the
+# rarer 3-SD touch ~71% - the interesting claim is a high win rate
+# WITHOUT collapsing R:R, which is exactly what our own RR-sweep this
+# session could never get past 0.5R at a similar win rate. Worth
+# testing on our own data rather than trusting the citation.
+# Uses vwap_z (already computed by add_vwap_features) directly.
+VWAP_BAND_Z_THRESHOLD = 2.0       # SD below VWAP required to arm the model
+VWAP_BAND_MIN_RVOL = 1.0
+
+# --- K: Larry Connors RSI(2) mean reversion (long only) ---
+# Widely cited 75-79% win rate - but that literature is on DAILY bars
+# with multi-day holds and a 200-day-MA trend filter; this is an
+# intraday adaptation (5-min RSI(2), EMA_STACK_SLOW as the trend
+# filter in place of the 200-day MA), so the win rate that literature
+# reports does NOT directly transfer - it's a reason to test the idea,
+# not a result to expect.
+RSI2_PERIOD = 2
+RSI2_OVERSOLD = 10.0
+RSI2_TREND_FILTER_EMA = EMA_STACK_SLOW   # only buy dips above this EMA
+
 # --- Volatility ---
 ATR_PERIOD = 14
 ATR_STOP_MULT = 1.5              # stop distance in ATRs from entry
@@ -91,6 +128,44 @@ OPENING_RANGE_MINUTES = 30
 VWAP_RECLAIM_LOOKBACK = 6
 VWAP_RECLAIM_MIN_BARS = 4        # bars on the wrong side before a reclaim counts
 CONFLUENCE_MAX_ATR = 0.5         # EMA and VWAP within this = one zone
+
+# --- Aggressor filter (D/E/G) ---
+# "Aggressor share" is the same geometric buy/sell split the live
+# check_vwap_retest already computes (strategy/screener.py::_candle_aggressor),
+# reframed as "how much of the signal candle's own range closed in the
+# trade's favor" - 1.0 means it closed at the exact high (long) or exact
+# low (short) with zero give-back.
+#
+# Data-driven, not assumed: a feature/outcome study over D_VWAP_RECLAIM,
+# E_VWAP_REJECTION and G_CONFLUENCE (DRAM + IREN, 42 days each, ~390
+# decided trades) found the naive read backwards - candles at >=0.95
+# aggressor share (near-zero give-back) were the WORST-performing bucket
+# in all three models individually, not the best:
+#   D: below 0.95 win 38.2%/+ -0.03R  vs  >=0.95 win 29.2%/-0.39R
+#   E: below 0.95 win 42.4%/+0.07R    vs  >=0.95 win 26.8%/-0.40R
+#   G: below 0.95 win 34.9%/-0.13R    vs  >=0.95 win 25.0%/-0.38R
+# A close pinned to the exact extreme with nothing pushing back reads as
+# a climax/exhaustion print, not stronger conviction - closer to what
+# "buying/selling the top tick" means for the other side. Re-validate
+# on a broader symbol set before trusting this beyond the discovery set.
+VWAP_MAX_AGGRESSOR = 0.95
+
+# --- Candle-quality stack (E_VWAP_REJECTION) ---
+# Same discovery run (DRAM + IREN) found that stacking three checks on
+# the signal candle - some volume behind it, AND a moderate body (not
+# a full-range no-wick print, which the aggressor filter above already
+# discourages but this narrows further), AND the aggressor filter - is
+# much stronger than aggressor alone:
+#   aggressor<0.95 alone:                    n=125  win 42.4%  avgR +0.072
+#   + rvol>1.0 + body 0.3-0.7:               n=26   win 61.5%  avgR +0.570
+# Held up split by symbol (DRAM 64%, IREN 58%) and by direction (long
+# 53%, short 73%) rather than being carried by one slice - but n=26 is
+# still small. MUST be re-validated on a broader symbol set before
+# this number is trusted; see broad-set results before/after in the
+# commit/PR notes.
+VWAP_REJECTION_MIN_RVOL = 1.0
+VWAP_REJECTION_BODY_MIN = 0.3
+VWAP_REJECTION_BODY_MAX = 0.7
 
 # --- Regime classifier ---
 REGIME_FILTER_ENABLED = os.getenv("REGIME_FILTER_ENABLED", "true").lower() == "true"
@@ -144,5 +219,44 @@ SLIPPAGE_BPS = 2.0               # basis points per side
 COMMISSION_BPS = 1.0             # basis points per side
 
 # --- Position sizing (reporting only; R-multiples are size-agnostic) ---
-ACCOUNT_EQUITY = 100000.0
-RISK_PER_TRADE_PCT = 0.005       # 0.5%; sweep with --risk-sweep
+# Override with e.g. ACCOUNT_EQUITY=10000 on the command line to size
+# the P&L/drawdown columns to your actual budget - win rate and R
+# multiples themselves don't change with this, only the currency math.
+ACCOUNT_EQUITY = float(os.getenv("ACCOUNT_EQUITY", "100000"))
+RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.005"))  # 0.5%; sweep with --risk-sweep
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SWING/POSITIONAL RESEARCH (strategy/swing_strategy.py,
+# backtest/run_swing_research.py) - "SWING_DAYS_STR"
+#
+# A DIFFERENT engine from everything above: daily bars, multi-day
+# holds (days, not minutes), no session VWAP, no EOD square-off. Kept
+# fully separate from the intraday research engine rather than forced
+# into evaluate_all() - that loop's regime classifier and stop
+# convention are built around session VWAP and ATR-scaled intraday
+# risk, neither of which means the same thing on a daily bar. Nothing
+# here is read by the intraday engine or by live/main.py.
+#
+# The entry logic is grounded in Mark Minervini's published "Trend
+# Template" (Trade Like a Stock Market Wizard) - moving-average stack
+# alignment (fast > mid > slow, all trending up), price near its
+# highs rather than its lows, and a volume-expansion breakout day -
+# the closest thing to a "world class", publicly documented breakout
+# system for swing/position equity trading. Minervini's own template
+# uses the 50/150/200-day MAs; this uses the periods requested here
+# (30/50/60) instead, so treat it as the same STRUCTURE, not a
+# reproduction of his published results.
+# ═══════════════════════════════════════════════════════════════════
+SWING_EMA_FAST = 30
+SWING_EMA_MID = 50
+SWING_EMA_SLOW = 60
+SWING_STRUCT_LOOKBACK = 50       # trading days defining the breakout level (~10 weeks)
+SWING_VOLUME_AVG_PERIOD = 50     # "expected" volume baseline - ~10 trading weeks
+SWING_MIN_VOLUME_RATIO = 1.5     # breakout day volume must be >= this x the baseline
+SWING_MIN_ABOVE_52W_LOW_PCT = 0.25   # Minervini filter: price >= 25% above its 52-week low
+SWING_MAX_BELOW_52W_HIGH_PCT = 0.25  # Minervini filter: price within 25% of its 52-week high
+SWING_TARGET_PCT = 0.08          # +8% profit target
+SWING_STOP_PCT = 0.02            # -2% stop-loss (4:1 reward:risk by construction)
+SWING_MAX_HOLD_DAYS = 120        # safety cap so a backtest position can't hold forever
+SWING_MIN_WARMUP_DAYS = SWING_EMA_SLOW + 5

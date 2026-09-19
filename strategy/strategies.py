@@ -121,6 +121,17 @@ def _rvol_threshold(direction: str) -> float:
     return base + (config.SHORT_RVOL_EXTRA if direction == "short" else 0.0)
 
 
+def _aggressor_share(row, direction: str) -> float:
+    """Same geometric buy/sell split as screener.py::_candle_aggressor,
+    reframed as 'how much of the candle's own range closed in the
+    trade's favor'. See config.VWAP_MAX_AGGRESSOR for why a HIGH value
+    here is filtered OUT, not for."""
+    hi, lo, close = _f(row.get("high")), _f(row.get("low")), _f(row.get("close"))
+    rng = hi - lo
+    buy_share = (close - lo) / rng if rng > 0 else 0.5
+    return buy_share if direction == "long" else (1.0 - buy_share)
+
+
 def _build(symbol, name, direction, row, regime: Regime, reason, score, structural_level=None):
     st = _stop_and_target(row, direction, structural_level)
     if st is None:
@@ -231,12 +242,19 @@ def model_c_breakout_retest(symbol, df, direction, regime) -> Optional[StrategyS
 def model_d_vwap_reclaim(symbol, df, direction, regime) -> Optional[StrategySignal]:
     """D. VWAP reclaim: price was on the wrong side of VWAP, then
     crosses and closes through it. A regime-change model rather than a
-    continuation model."""
+    continuation model.
+
+    Filters out climax reclaims: a signal candle that closed at
+    config.VWAP_MAX_AGGRESSOR or more of its own range in the trade's
+    favor (near-zero give-back) - see that config entry for the
+    feature/outcome data behind this."""
     if len(df) < config.VWAP_RECLAIM_LOOKBACK + 2:
         return None
     row, prev = df.iloc[-1], df.iloc[-2]
     vwap, close = _f(row.get("vwap")), _f(row.get("close"))
     if vwap <= 0:
+        return None
+    if _aggressor_share(row, direction) >= config.VWAP_MAX_AGGRESSOR:
         return None
     window = df.iloc[-(config.VWAP_RECLAIM_LOOKBACK + 1):-1]
 
@@ -260,11 +278,22 @@ def model_e_vwap_rejection(symbol, df, direction, regime) -> Optional[StrategySi
     """E. VWAP rejection: price tests VWAP from the trending side and
     is rejected, continuing away from it. The mirror of D - included so
     the two can be compared directly, since they cannot both be right
-    about what VWAP means in the same regime."""
+    about what VWAP means in the same regime.
+
+    Filters out climax rejections - see config.VWAP_MAX_AGGRESSOR."""
     row = df.iloc[-1]
     vwap, close = _f(row.get("vwap")), _f(row.get("close"))
     atr = _atr(row)
     if vwap <= 0 or atr <= 0:
+        return None
+    if _aggressor_share(row, direction) >= config.VWAP_MAX_AGGRESSOR:
+        return None
+    rvol = _f(row.get("rvol"))
+    if rvol < config.VWAP_REJECTION_MIN_RVOL:
+        return None
+    hi, lo, op = _f(row.get("high")), _f(row.get("low")), _f(row.get("open"))
+    body_ratio = abs(close - op) / (hi - lo) if (hi - lo) > 0 else 0.0
+    if not (config.VWAP_REJECTION_BODY_MIN <= body_ratio <= config.VWAP_REJECTION_BODY_MAX):
         return None
     tol = atr * config.RETEST_TOUCH_ATR
 
@@ -321,12 +350,16 @@ def model_g_confluence(symbol, df, direction, regime) -> Optional[StrategySignal
     fraction of an ATR of each other and price reacts to the combined
     zone. The thesis is that two independent reference levels agreeing
     makes a stronger level - this model exists to test that claim, not
-    to assume it."""
+    to assume it.
+
+    Filters out climax reactions - see config.VWAP_MAX_AGGRESSOR."""
     row = df.iloc[-1]
     fast = _f(row.get(f"ema_{config.EMA_FAST}"))
     vwap = _f(row.get("vwap"))
     close, atr = _f(row.get("close")), _atr(row)
     if fast <= 0 or vwap <= 0 or atr <= 0:
+        return None
+    if _aggressor_share(row, direction) >= config.VWAP_MAX_AGGRESSOR:
         return None
     if abs(fast - vwap) > atr * config.CONFLUENCE_MAX_ATR:
         return None   # levels too far apart to be one zone
@@ -369,6 +402,123 @@ def model_h_orb(symbol, df, direction, regime) -> Optional[StrategySignal]:
         return None
     return _build(symbol, "H_ORB_VWAP", direction, row, regime,
                   f"broke opening range {or_lo:.2f} below VWAP", 70, or_hi)
+
+
+def model_i_ema_stack_breakout(symbol, df, direction, regime) -> Optional[StrategySignal]:
+    """I. 10/20/50 EMA stack breakout - LONG ONLY.
+
+    This version trades cash equity (buy shares, no shorting), so this
+    model never fires short. The setup: the three EMAs are stacked
+    bullish (10 > 20 > 50 - established multi-timeframe trend, not just
+    a fast/slow cross), price is above VWAP (participating with today's
+    session, not just the daily trend), and the signal candle breaks
+    recent structure with real volume behind it - the same
+    EMA+VWAP+volume read the user already does by eye on their charts.
+
+    Unlike the VWAP touch/test models (D/E/G), a breakout candle closing
+    strong on high volume is being read as confirmation here, not
+    climax exhaustion - a genuine structural break is a different
+    microstructure event than a test of a level, and that assumption is
+    exactly what needs checking empirically once there's enough trade
+    volume to check it, not assumed from the VWAP-model findings."""
+    if direction != "long":
+        return None
+    if regime.direction != "strong_bull":
+        return None
+    row = df.iloc[-1]
+    e_fast = _f(row.get(f"ema_{config.EMA_STACK_FAST}"))
+    e_mid = _f(row.get(f"ema_{config.EMA_STACK_MID}"))
+    e_slow = _f(row.get(f"ema_{config.EMA_STACK_SLOW}"))
+    vwap, close = _f(row.get("vwap")), _f(row.get("close"))
+    struct_hi = _f(row.get("struct_high"))
+    rvol = _f(row.get("rvol"))
+    atr = _atr(row)
+    if e_fast <= 0 or e_mid <= 0 or e_slow <= 0 or vwap <= 0 or struct_hi <= 0 or atr <= 0:
+        return None
+
+    stacked = e_fast > e_mid > e_slow
+    above_vwap = close > vwap
+    broke_structure = close > struct_hi
+    volume_confirmed = rvol >= config.EMA_STACK_MIN_RVOL
+    # Not a climax breakout candle (see config.VWAP_MAX_AGGRESSOR) and
+    # not already deep into an extended move - a "break" that happens
+    # a long way above the 50 EMA is chasing an already-stretched
+    # trend, not catching a fresh one.
+    not_climax = _aggressor_share(row, "long") < config.VWAP_MAX_AGGRESSOR
+    not_extended = (close - e_slow) / atr <= config.EMA_STACK_MAX_EXTENSION_ATR
+    if not (stacked and above_vwap and broke_structure and volume_confirmed
+            and not_climax and not_extended):
+        return None
+
+    return _build(symbol, "I_EMA_STACK_BREAKOUT", direction, row, regime,
+                  f"EMA{config.EMA_STACK_FAST}/{config.EMA_STACK_MID}/{config.EMA_STACK_SLOW} "
+                  f"stacked, broke {struct_hi:.2f} above VWAP on {rvol:.1f}x vol",
+                  75, _f(row.get("low")))
+
+
+def model_j_vwap_band_reversion(symbol, df, direction, regime) -> Optional[StrategySignal]:
+    """J. VWAP standard-deviation band reversion - LONG ONLY.
+
+    Sourced from a cited QuantConnect study on 100 liquid NASDAQ names:
+    buying when price is stretched 2+ standard deviations BELOW VWAP
+    (using vwap_z, the z-score already computed by add_vwap_features -
+    not a raw ATR distance, for the same reason the scoring engine
+    uses it: session VWAP distance grows mechanically through a
+    trending session, so only the z-score is comparable across the
+    day) showed ~61% win rate at ~1.4:1 R:R in that study, rising to
+    ~71% at a 3-SD touch. That is a genuinely different claim from
+    everything else in this file: high win rate WITHOUT giving up
+    reward:risk. Worth testing on our own data, not trusting the
+    citation - see config.VWAP_BAND_Z_THRESHOLD for the numbers."""
+    if direction != "long":
+        return None
+    row = df.iloc[-1]
+    vwap, close = _f(row.get("vwap")), _f(row.get("close"))
+    z = _f(row.get("vwap_z"))
+    rvol = _f(row.get("rvol"))
+    if vwap <= 0 or z == 0:
+        return None
+
+    stretched = z <= -config.VWAP_BAND_Z_THRESHOLD
+    reverting = close > _f(row.get("open"))          # this candle already turning up
+    volume_ok = rvol >= config.VWAP_BAND_MIN_RVOL
+    if not (stretched and reverting and volume_ok):
+        return None
+
+    return _build(symbol, "J_VWAP_BAND_REVERSION", direction, row, regime,
+                  f"vwap_z {z:.2f} (>= {config.VWAP_BAND_Z_THRESHOLD:.1f} SD stretch), turning up",
+                  70, _f(row.get("low")))
+
+
+def model_k_rsi2_reversion(symbol, df, direction, regime) -> Optional[StrategySignal]:
+    """K. Larry Connors RSI(2) mean reversion - LONG ONLY.
+
+    Sourced from Connors' published research (cited 75-79% win rate):
+    buy when RSI(2) is deeply oversold (<= config.RSI2_OVERSOLD) while
+    price is still above a longer-term trend filter (the 200-day MA in
+    Connors' original daily-bar design; EMA_STACK_SLOW here since this
+    is an intraday adaptation - a dip-buy in an uptrend, not a falling
+    knife). IMPORTANT: that win-rate citation is for DAILY bars held
+    over several days, not 5-min intraday with same-day exit - treat it
+    as the reason to test this, not the expected result."""
+    if direction != "long":
+        return None
+    row = df.iloc[-1]
+    rsi = _f(row.get(f"rsi_{config.RSI2_PERIOD}"), default=50.0)
+    trend_ema = _f(row.get(f"ema_{config.RSI2_TREND_FILTER_EMA}"))
+    close = _f(row.get("close"))
+    if trend_ema <= 0:
+        return None
+
+    oversold = rsi <= config.RSI2_OVERSOLD
+    above_trend = close > trend_ema
+    reverting = close > _f(row.get("open"))
+    if not (oversold and above_trend and reverting):
+        return None
+
+    return _build(symbol, "K_RSI2_REVERSION", direction, row, regime,
+                  f"RSI{config.RSI2_PERIOD}={rsi:.1f} oversold above EMA{config.RSI2_TREND_FILTER_EMA}",
+                  70, _f(row.get("low")))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -481,6 +631,9 @@ ENTRY_MODELS = {
     "F_EMA_PULLBACK": model_f_ema_pullback,
     "G_CONFLUENCE": model_g_confluence,
     "H_ORB_VWAP": model_h_orb,
+    "I_EMA_STACK_BREAKOUT": model_i_ema_stack_breakout,
+    "J_VWAP_BAND_REVERSION": model_j_vwap_band_reversion,
+    "K_RSI2_REVERSION": model_k_rsi2_reversion,
     "SCORE_ENGINE": model_score_engine,
 }
 

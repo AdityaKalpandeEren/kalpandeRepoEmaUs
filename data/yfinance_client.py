@@ -164,3 +164,61 @@ def get_historical_candles(symbol: str, interval_minutes: int, start_date: str, 
     for col in ["open", "high", "low", "close", "volume"]:
         combined[col] = pd.to_numeric(combined[col])
     return combined[["timestamp", "open", "high", "low", "close", "volume"]]
+
+
+def get_daily_candles(symbol: str, start_date: str, end_date: str,
+                       max_retries: int = 3, pause_seconds: float = 1.5) -> pd.DataFrame:
+    """Fetch DAILY candles - for swing/positional strategies that hold
+    across sessions (strategy/swing_strategy.py), not the intraday
+    session-VWAP models above.
+
+    Unlike get_historical_candles, daily bars aren't subject to Yahoo's
+    ~60-day intraday retention limit - years of daily history are
+    available in one request, so this doesn't need the chunking
+    get_historical_candles uses to dodge intraday rate limits.
+    """
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)  # make end_date inclusive
+
+    ticker = yf.Ticker(symbol)
+    df = None
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            df = ticker.history(
+                start=start_dt.strftime("%Y-%m-%d"),
+                end=end_dt.strftime("%Y-%m-%d"),
+                interval="1d",
+                auto_adjust=False,
+            )
+            last_error = None
+            break
+        except Exception as e:
+            last_error = e
+            time.sleep(pause_seconds * attempt)
+
+    if last_error is not None:
+        raise RuntimeError(
+            f"Failed to fetch daily candles for {symbol} {start_date}..{end_date} after "
+            f"{max_retries} attempts. Underlying error: {last_error!r}."
+        ) from last_error
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+    df = df.reset_index()
+    time_col = "Date" if "Date" in df.columns else "Datetime"
+    df = df.rename(columns={
+        time_col: "timestamp", "Open": "open", "High": "high", "Low": "low",
+        "Close": "close", "Volume": "volume",
+    })
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    if df["timestamp"].dt.tz is None:
+        df["timestamp"] = df["timestamp"].dt.tz_localize(MARKET_TZ)
+    else:
+        df["timestamp"] = df["timestamp"].dt.tz_convert(MARKET_TZ)
+
+    df = df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col])
+    return df[["timestamp", "open", "high", "low", "close", "volume"]]

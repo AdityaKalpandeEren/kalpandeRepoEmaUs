@@ -113,6 +113,23 @@ def add_relative_volume(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
     return df
 
 
+def add_rsi(df: pd.DataFrame, period: int = 2, column: str = "close") -> pd.DataFrame:
+    """Wilder's RSI. Added specifically for Larry Connors' RSI(2)
+    mean-reversion model (see strategies.py::model_k_rsi2_reversion) -
+    the classic short-period RSI, not the standard 14-period trend
+    oscillator."""
+    df = df.copy()
+    delta = df[column].diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, pd.NA)
+    df[f"rsi_{period}"] = 100 - (100 / (1 + rs))
+    df.loc[avg_loss == 0, f"rsi_{period}"] = 100.0
+    return df
+
+
 def add_vwap_features(df: pd.DataFrame, dev_lookback: int = 20) -> pd.DataFrame:
     """VWAP distance in standard deviations (a z-score, so it's
     comparable across symbols) plus VWAP slope. `add_vwap` must have
@@ -174,8 +191,12 @@ def enrich(df: pd.DataFrame, ema_fast: int, ema_slow: int, atr_period: int,
     df = add_ema(df, ema_slow)
     df = add_ema_slope(df, ema_fast)
     df = add_ema_slope(df, ema_slow)
+    df = add_ema(df, config.EMA_STACK_FAST)
+    df = add_ema(df, config.EMA_STACK_MID)
+    df = add_ema(df, config.EMA_STACK_SLOW)
     df = add_vwap(df)
     df = add_vwap_features(df)
+    df = add_rsi(df, config.RSI2_PERIOD)
     df = add_atr(df, atr_period)
     df = add_atr_percentile(df, atr_period)
     df = add_relative_volume(df, vol_period)
