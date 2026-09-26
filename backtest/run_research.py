@@ -25,18 +25,24 @@ historical candles, and ranks them by expectancy.
     python -m backtest.run_research --days 45 --risk-sweep
 
 Models:
-  A_BREAKOUT          immediate structural breakout
-  B_BREAKOUT_CLOSE    breakout confirmed by candle close
-  C_BREAKOUT_RETEST   breakout, retest, continuation
-  D_VWAP_RECLAIM      cross back through VWAP
-  E_VWAP_REJECTION    rejection off VWAP in trend direction
-  F_EMA_PULLBACK      pullback to fast EMA in an EMA trend
-  G_CONFLUENCE        EMA and VWAP agreeing as one zone
-  H_ORB_VWAP          opening-range breakout + VWAP confirmation
-  SCORE_ENGINE        weighted 6-component score
+  A_BREAKOUT            immediate structural breakout
+  B_BREAKOUT_CLOSE      breakout confirmed by candle close
+  C_BREAKOUT_RETEST     breakout, retest, continuation
+  D_VWAP_RECLAIM        cross back through VWAP
+  E_VWAP_REJECTION      rejection off VWAP in trend direction
+  F_EMA_PULLBACK        pullback to fast EMA in an EMA trend
+  G_CONFLUENCE          EMA and VWAP agreeing as one zone
+  H_ORB_VWAP            opening-range breakout + VWAP confirmation
+  I_EMA_STACK_BREAKOUT  10/20/50 EMA ribbon breakout
+  J_VWAP_BAND_REVERSION buy the lower VWAP stdev band
+  K_RSI2_REVERSION      Connors RSI(2) dip-buy above trend
+  SCORE_ENGINE          weighted 6-component score
+  L_ML_META             ML classifier filtering A-K/SCORE_ENGINE's own
+                         candidates (meta-labeling) - see backtest/ml/;
+                         fires nothing until a model has been trained
 
 Read the caveats at the end of the printed summary before acting on
-any ranking. Nine models on one dataset means the winner is partly
+any ranking. This many models on one dataset means the winner is partly
 luck; the report says so per strategy.
 """
 import argparse
@@ -180,7 +186,7 @@ def main():
     print("=" * 78)
     print("1. Yahoo caps 5-min history at ~60 days, so this is ONE market period.")
     print("   A model that wins here has not been validated across regimes.")
-    print("2. Nine models on one dataset: the winner is partly selection luck.")
+    print("2. This many models on one dataset: the winner is partly selection luck.")
     print("   Re-run the top 2-3 on a DIFFERENT date range before believing them.")
     print("3. Check the t-stat. Below 2.0 the result is inside the noise band,")
     print("   no matter how good the win rate looks.")

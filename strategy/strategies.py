@@ -35,13 +35,14 @@ SHORT ASYMMETRY (why shorts are not mirrored longs):
 Whether those asymmetries actually help is an empirical question the
 backtest can answer - they are config values, not hard-coded truths.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 import pandas as pd
 
 import config
 from strategy.regime import classify, is_tradeable, Regime
+from strategy.ml_features import extract_features, FEATURE_COLUMNS
 
 
 @dataclass
@@ -621,8 +622,90 @@ def model_score_engine(symbol, df, direction, regime) -> Optional[StrategySignal
 
 
 # ═══════════════════════════════════════════════════════════════════
+# L: ML META-LABEL FILTER
+#
+# Not a 13th way of inventing an entry. The 12 models above already
+# propose candidate trades; this loads a classifier trained on this
+# engine's own historical trade outcomes (backtest/ml/train_meta_model.py)
+# and only lets a candidate through if the model rates it above
+# config.ML_META_MIN_PROB - i.e. it learns which of the EXISTING
+# setups are worth taking, from real outcomes, rather than inventing
+# new ones. See strategy/ml_features.py for why this is meta-labeling
+# and not "predict price with ML" (the latter is the version that
+# reliably produces a curve-fit model that dies live).
+#
+# Returns None with no error if no model has been trained yet - a
+# missing model file is a legitimate state (fresh checkout), not a bug.
+# ═══════════════════════════════════════════════════════════════════
+_ml_model = None
+_ml_feature_columns = None
+_ml_load_attempted = False
 
-ENTRY_MODELS = {
+
+def _load_ml_model():
+    global _ml_model, _ml_feature_columns, _ml_load_attempted
+    if _ml_load_attempted:
+        return _ml_model
+    _ml_load_attempted = True
+    try:
+        import joblib
+        bundle = joblib.load(config.ML_META_MODEL_PATH)
+        _ml_model = bundle["model"]
+        _ml_feature_columns = bundle.get("feature_columns", FEATURE_COLUMNS)
+    except Exception:
+        _ml_model = None
+    return _ml_model
+
+
+def model_l_ml_meta(symbol, df, direction, regime) -> Optional[StrategySignal]:
+    """L. ML meta-label filter over models A-K + SCORE_ENGINE.
+
+    Runs every base model, scores each candidate with the trained
+    classifier, and returns the highest-probability candidate IF it
+    clears config.ML_META_MIN_PROB - otherwise no signal, even if one
+    of the base models fired. Stop/target/entry are kept exactly as the
+    underlying model computed them (that's what the classifier was
+    trained against); only the strategy label, score (= probability
+    *100) and reason change.
+    """
+    model = _load_ml_model()
+    if model is None:
+        return None
+    row = df.iloc[-1]
+
+    best_sig, best_name, best_prob = None, None, -1.0
+    for name, fn in BASE_MODELS.items():
+        try:
+            cand = fn(symbol, df, direction, regime)
+        except Exception:
+            continue
+        if cand is None:
+            continue
+        comps = _component_scores(row, df, direction)
+        feats = extract_features(row, df, direction, regime, comps, name)
+        cols = _ml_feature_columns or FEATURE_COLUMNS
+        x = pd.DataFrame([feats], columns=cols)
+        try:
+            prob = float(model.predict_proba(x)[0][1])
+        except Exception:
+            continue
+        if prob > best_prob:
+            best_sig, best_name, best_prob = cand, name, prob
+
+    if best_sig is None or best_prob < config.ML_META_MIN_PROB:
+        return None
+
+    return replace(
+        best_sig,
+        strategy="L_ML_META",
+        score=round(best_prob * 100, 1),
+        reason=f"meta-filter: {best_name} p={best_prob:.2f}",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+
+BASE_MODELS = {
     "A_BREAKOUT": model_a_breakout,
     "B_BREAKOUT_CLOSE": model_b_breakout_close,
     "C_BREAKOUT_RETEST": model_c_breakout_retest,
@@ -636,6 +719,8 @@ ENTRY_MODELS = {
     "K_RSI2_REVERSION": model_k_rsi2_reversion,
     "SCORE_ENGINE": model_score_engine,
 }
+
+ENTRY_MODELS = {**BASE_MODELS, "L_ML_META": model_l_ml_meta}
 
 
 def evaluate_all(symbol: str, df: pd.DataFrame, models: dict = None,

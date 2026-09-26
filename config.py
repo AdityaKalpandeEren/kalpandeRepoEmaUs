@@ -260,3 +260,20 @@ SWING_TARGET_PCT = 0.08          # +8% profit target
 SWING_STOP_PCT = 0.02            # -2% stop-loss (4:1 reward:risk by construction)
 SWING_MAX_HOLD_DAYS = 120        # safety cap so a backtest position can't hold forever
 SWING_MIN_WARMUP_DAYS = SWING_EMA_SLOW + 5
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ML META-LABEL FILTER (strategy/ml_features.py, model L_ML_META in
+# strategy/strategies.py, backtest/ml/)
+#
+# NOT a strategy that invents its own entries. It's a classifier
+# trained on this engine's own historical trade outcomes that decides
+# which of the 12 existing models' candidate trades are worth taking
+# (Lopez de Prado's "meta-labeling"). See backtest/ml/train_meta_model.py
+# for the honest, walk-forward out-of-sample report - do not assume this
+# helps just because it exists; the trainer's own printout says whether
+# it beat "take every candidate" out of sample.
+# ═══════════════════════════════════════════════════════════════════
+ML_META_MODEL_PATH = "backtest/ml/model/meta_model.joblib"
+ML_META_MIN_PROB = float(os.getenv("ML_META_MIN_PROB", "0.55"))   # predict_proba floor to fire
+ML_META_TEST_FRAC = 0.3          # last N% of rows BY TIME held out, never trained on

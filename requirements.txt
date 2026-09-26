@@ -3,3 +3,5 @@ curl_cffi>=0.7,<1.0
 pandas
 requests
 python-dotenv
+scikit-learn
+joblib
