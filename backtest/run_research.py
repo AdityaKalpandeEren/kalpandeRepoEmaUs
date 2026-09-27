@@ -40,6 +40,12 @@ Models:
   L_ML_META             ML classifier filtering A-K/SCORE_ENGINE's own
                          candidates (meta-labeling) - see backtest/ml/;
                          fires nothing until a model has been trained
+  L_ML_META_V2          V2 of the above: also sees VIX/VXN, VIX term
+                         structure, breadth, QQQ/SPY tape and earnings/
+                         gap/volume catalysts; regular hours only; exits
+                         at the regular close or early on a market shock.
+                         Train with backtest/ml/build_dataset_v2.py +
+                         train_meta_model_v2.py (news overlay is live-only)
 
 Read the caveats at the end of the printed summary before acting on
 any ranking. This many models on one dataset means the winner is partly

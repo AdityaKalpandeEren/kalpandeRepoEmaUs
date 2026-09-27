@@ -21,7 +21,8 @@ import pandas as pd
 import config
 from strategy.indicators import enrich
 from strategy.strategies import evaluate_all, ENTRY_MODELS
-from strategy.trade_engine import simulate_forward_directional, build_research_trade
+from strategy.trade_engine import (simulate_forward_directional, simulate_forward_v2,
+                                   build_research_trade)
 
 
 def _enrich_day(day_df: pd.DataFrame, candle_minutes: int) -> pd.DataFrame:
@@ -79,9 +80,15 @@ def simulate_day_research(symbol: str, day_df: pd.DataFrame, candle_minutes: int
             if sig.direction == "short" and entry_price >= sig.stop_loss:
                 continue
 
-            exit_time, exit_price, outcome, exit_idx = simulate_forward_directional(
-                day_df, fill_idx, sig.direction, entry_price, sig.stop_loss, sig.target
-            )
+            if getattr(sig, "exit_mode", "standard") == "v2":
+                from strategy.market_context import get_context
+                exit_time, exit_price, outcome, exit_idx = simulate_forward_v2(
+                    day_df, fill_idx, sig.direction, entry_price, sig.stop_loss, sig.target,
+                    get_context())
+            else:
+                exit_time, exit_price, outcome, exit_idx = simulate_forward_directional(
+                    day_df, fill_idx, sig.direction, entry_price, sig.stop_loss, sig.target
+                )
 
             trades.append(build_research_trade(
                 signal=sig,

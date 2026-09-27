@@ -12,20 +12,74 @@ on:
     - cron: "*/5 13-21 * * 1-5"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
+# One scan at a time: the research paper-trading state (live_state/) is
+# read at the start of a run and written at the end, so two overlapping
+# runs would lose each other's trades. A trigger that arrives while a run
+# is in progress waits; the next run catches up on every candle closed
+# since the last one, so nothing is skipped.
+concurrency:
+  group: us-alert-scan
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - run: pip install -r requirements.txt
+
+      # Paper-trading state + L_ML_META_V2's market-data cache survive
+      # between runs via the Actions cache: restore the newest one, save a
+      # new one at the end (a cache key can't be overwritten, hence the
+      # per-run key).
+      - name: Restore paper-trading state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            live_state
+            backtest/ml/cache
+          key: live-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            live-state-
 
       - run: python scan_once.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Optional: a separate chat for research/paper alerts + EOD report.
+          LIVE_RESEARCH_CHAT_ID: ${{ secrets.LIVE_RESEARCH_CHAT_ID }}
+
+      - name: Save paper-trading state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            live_state
+            backtest/ml/cache
+          key: live-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Downloadable copy of the day's report + the all-time trade log
+      # (Actions run page -> Artifacts) - only on after-close runs, not
+      # on every 5-minute scan.
+      - name: Check ET hour
+        id: et
+        if: always()
+        run: echo "hour=$(TZ=America/New_York date +%-H)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload paper-trading reports
+        if: always() && steps.et.outputs.hour >= 20
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-trading-${{ github.run_id }}
+          path: |
+            live_state/reports
+            live_state/paper_trades_all.csv
+          if-no-files-found: ignore
+          retention-days: 30

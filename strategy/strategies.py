@@ -43,6 +43,7 @@ import pandas as pd
 import config
 from strategy.regime import classify, is_tradeable, Regime
 from strategy.ml_features import extract_features, FEATURE_COLUMNS
+from strategy.ml_features_v2 import extract_features_v2
 
 
 @dataclass
@@ -58,6 +59,10 @@ class StrategySignal:
     score: float              # 0..100; hard-rule models report their confirmation count scaled
     reason: str
     candle_time: object
+    # How the simulator should exit this trade: "standard" (stop/target/
+    # EOD, every model A-L) or "v2" (adds SESSION_CLOSE + SHOCK_EXIT -
+    # see strategy/trade_engine.py::simulate_forward_v2).
+    exit_mode: str = "standard"
 
 
 def _f(v, default=0.0) -> float:
@@ -704,6 +709,119 @@ def model_l_ml_meta(symbol, df, direction, regime) -> Optional[StrategySignal]:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# L_ML_META_V2: CONTEXT- AND CATALYST-AWARE META-LABEL FILTER
+#
+# Same job as L_ML_META (choose among the 12 base models' candidates),
+# but the classifier also sees the market (VIX/VXN vs SMA50, VIX term
+# structure, breadth, QQQ/SPY tape) and the stock's catalyst footprint
+# (earnings timing + surprise, gap, time-of-day volume, relative
+# strength) - see strategy/market_context.py. On top of the model:
+#   - session gate: regular hours only (config.ML_V2_SESSION_*)
+#   - hard risk-off vetoes for longs (config.ML_V2_VIX_*)
+#   - LIVE ONLY: headline news for the symbol and the market can veto
+#     or slightly favour a trade (strategy/news_catalyst.py)
+#   - its trades exit with simulate_forward_v2 (flat at the regular
+#     close, early exit on a market shock against the position)
+# The trained bundle carries the probability threshold the trainer
+# chose on its validation block (config.ML_V2_MIN_PROB="auto").
+# ═══════════════════════════════════════════════════════════════════
+_ml_v2 = {"bundle": None, "attempted": False}
+
+
+def _load_ml_v2():
+    if _ml_v2["attempted"]:
+        return _ml_v2["bundle"]
+    _ml_v2["attempted"] = True
+    try:
+        import joblib
+        _ml_v2["bundle"] = joblib.load(config.ML_V2_MODEL_PATH)
+    except Exception:
+        _ml_v2["bundle"] = None
+    return _ml_v2["bundle"]
+
+
+def ml_v2_threshold(bundle) -> float:
+    if str(config.ML_V2_MIN_PROB).lower() == "auto":
+        return float(bundle.get("threshold", 0.55))
+    return float(config.ML_V2_MIN_PROB)
+
+
+def ml_v2_in_session(df) -> bool:
+    from strategy.market_context import minutes_since_open
+    mso = minutes_since_open(df.iloc[-1]["timestamp"])
+    return config.ML_V2_SESSION_START_MIN <= mso <= config.ML_V2_SESSION_END_MIN
+
+
+def ml_v2_candidates(symbol, df, direction, regime, ctx):
+    """Every base-model candidate V2 would score on this candle, with
+    its V2 feature row: [(name, signal, feats)]. Empty when the session
+    gate or a hard risk veto blocks the candle. Shared by the model and
+    backtest/ml/build_dataset_v2.py, so training sees exactly the
+    population the model is later asked to judge."""
+    if not ml_v2_in_session(df):
+        return []
+    fired = []
+    for name, fn in BASE_MODELS.items():
+        try:
+            cand = fn(symbol, df, direction, regime)
+        except Exception:
+            continue
+        if cand is not None:
+            fired.append((name, cand))
+    if not fired:
+        return []
+    ctx_feats = ctx.features(symbol, df, direction)
+    if ctx.risk_veto(ctx_feats, direction):
+        return []
+    row = df.iloc[-1]
+    comps = _component_scores(row, df, direction)
+    return [(name, cand, extract_features_v2(row, df, direction, regime, comps, name, ctx_feats, cand))
+            for name, cand in fired]
+
+
+def model_l_ml_meta_v2(symbol, df, direction, regime) -> Optional[StrategySignal]:
+    """L_ML_META_V2 - see the block comment above."""
+    bundle = _load_ml_v2()
+    if bundle is None or not ml_v2_in_session(df):
+        return None
+    from strategy.market_context import get_context
+    ctx = get_context()
+    cands = ml_v2_candidates(symbol, df, direction, regime, ctx)
+    if not cands:
+        return None
+
+    cols = bundle["feature_columns"]
+    X = pd.DataFrame([f for _, _, f in cands], columns=cols)
+    try:
+        probs = bundle["model"].predict_proba(X)[:, 1]
+    except Exception:
+        return None
+    best = int(probs.argmax())
+    best_name, best_sig, _ = cands[best]
+    best_prob = float(probs[best])
+    threshold = ml_v2_threshold(bundle)
+
+    news_note = ""
+    if ctx.live and config.ML_V2_NEWS_ENABLED and best_prob >= threshold - config.ML_V2_NEWS_BOOST_PROB:
+        from strategy import news_catalyst
+        veto, adj, sym_read, mkt_read = news_catalyst.entry_decision(symbol, direction)
+        if veto:
+            return None
+        threshold += adj
+        news_note = f" | news {sym_read.score:+.2f} mkt {mkt_read.score:+.2f}"
+
+    if best_prob < threshold:
+        return None
+    return replace(
+        best_sig,
+        strategy="L_ML_META_V2",
+        score=round(best_prob * 100, 1),
+        reason=f"meta-v2: {best_name} p={best_prob:.2f} (bar {threshold:.2f}){news_note}",
+        exit_mode="v2",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
 
 BASE_MODELS = {
     "A_BREAKOUT": model_a_breakout,
@@ -720,7 +838,8 @@ BASE_MODELS = {
     "SCORE_ENGINE": model_score_engine,
 }
 
-ENTRY_MODELS = {**BASE_MODELS, "L_ML_META": model_l_ml_meta}
+ENTRY_MODELS = {**BASE_MODELS, "L_ML_META": model_l_ml_meta,
+                "L_ML_META_V2": model_l_ml_meta_v2}
 
 
 def evaluate_all(symbol: str, df: pd.DataFrame, models: dict = None,

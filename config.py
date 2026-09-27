@@ -277,3 +277,161 @@ SWING_MIN_WARMUP_DAYS = SWING_EMA_SLOW + 5
 ML_META_MODEL_PATH = "backtest/ml/model/meta_model.joblib"
 ML_META_MIN_PROB = float(os.getenv("ML_META_MIN_PROB", "0.55"))   # predict_proba floor to fire
 ML_META_TEST_FRAC = 0.3          # last N% of rows BY TIME held out, never trained on
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ML META-LABEL FILTER V2 (model L_ML_META_V2 in strategy/strategies.py,
+# strategy/market_context.py, strategy/news_catalyst.py,
+# strategy/ml_features_v2.py, backtest/ml/*_v2.py)
+#
+# Same meta-labeling idea as L_ML_META above (the 12 base models propose,
+# a classifier decides), with four changes - each one there because the
+# V1 data or V1 design showed a concrete gap, not added for its own sake:
+#
+#  1. MARKET CONTEXT features (VIX/VXN level vs their 50-day SMA, VIX
+#     term structure, % of a broad universe above its 50-day SMA, QQQ/SPY
+#     intraday trend) - V1 only ever saw the symbol's own candles, so it
+#     could not tell a calm tape from a risk-off one.
+#  2. CATALYST features that are point-in-time backtestable: earnings
+#     proximity + last EPS surprise, today's gap, time-of-day relative
+#     volume ("is this stock in play today"), relative strength vs QQQ.
+#  3. SESSION GATE - V1's own dataset: pre-market (-0.21R), after-hours
+#     (-0.11R, mostly squared off at 8pm) and 15:00-16:00 (-0.28R) were
+#     the worst buckets. V2 only trades the regular session window below
+#     and flattens at the regular close instead of 8pm after-hours.
+#  4. DYNAMIC EXITS + NEWS - an open V2 trade is closed early if the
+#     market turns against it (QQQ drop / VIX spike since entry). Live,
+#     headline news is read for the symbol AND the broad market: a bad
+#     catalyst vetoes a long (a good one vetoes a short), an aligned one
+#     slightly lowers the probability bar.
+#
+# NEWS IS LIVE-ONLY. Yahoo serves only the latest ~10 headlines per
+# ticker - there is no historical archive, so headline sentiment cannot
+# be backtested or trained on. It is therefore NOT an ML feature (that
+# would be train/serve skew: trained always-neutral, served non-neutral),
+# only a rule-based overlay applied at live inference time. Earnings
+# dates/surprises and gap/volume ARE historical, which is why those are
+# the catalyst inputs the model actually learns from.
+# ═══════════════════════════════════════════════════════════════════
+ML_V2_MODEL_PATH = "backtest/ml/model/meta_model_v2.joblib"
+ML_V2_DATASET_PATH = "backtest/ml/data/dataset_v2.csv"
+ML_V2_CACHE_DIR = "backtest/ml/cache"
+# Probability floor. "auto" = use the threshold the trainer picked on its
+# VALIDATION block (stored in the model bundle) - never one tuned on test.
+ML_V2_MIN_PROB = os.getenv("ML_V2_MIN_PROB", "auto")
+
+# --- Session gate (minutes after the 9:30 ET regular open) ---
+ML_V2_SESSION_START_MIN = 15      # 9:45 - skip the opening auction chaos
+ML_V2_SESSION_END_MIN = 330       # 15:00 - last-hour entries were the worst bucket
+ML_V2_FLAT_MIN = 385              # 15:55 - flatten at the regular close, not 8pm
+
+# --- Hard market-risk vetoes (rule-based, applied before the model) ---
+# Standard risk-off markers. The ML only saw ~60 days of one market
+# regime and cannot learn a crash it never saw; these rules cover that.
+ML_V2_VETO_ENABLED = os.getenv("ML_V2_VETO_ENABLED", "true").lower() == "true"
+ML_V2_VIX_MAX_LONG = 30.0         # no new longs with VIX at/above this
+ML_V2_VIX_TERM_MAX_LONG = 1.05    # VIX/VIX3M above this = backwardation (panic)
+ML_V2_VIX_DAY_SPIKE_MAX_LONG = 0.12   # VIX up >12% on the day = risk-off tape
+
+# --- Dynamic "bad catalyst during the trade" exit ---
+# Backtestable proxy for a market-wide negative catalyst hitting an open
+# trade: the index moving hard against the position, or volatility
+# spiking, after entry. Exits at that bar's close.
+ML_V2_SHOCK_EXIT_ENABLED = os.getenv("ML_V2_SHOCK_EXIT_ENABLED", "true").lower() == "true"
+ML_V2_SHOCK_QQQ_PCT = 0.006       # QQQ moves 0.6% against the trade since entry
+ML_V2_SHOCK_VIX_PCT = 0.08        # VIX up 8% since entry (longs) / down 8% (shorts)
+
+# --- Breadth universe (% above 50-day SMA) ---
+# A fixed, sector-diverse large-cap list rather than the watchlist, so the
+# breadth reading does not change meaning when the watchlist changes.
+ML_V2_BREADTH_UNIVERSE = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "AVGO", "TSLA", "ORCL", "CRM",
+    "ADBE", "AMD", "INTC", "CSCO", "QCOM", "TXN", "IBM", "NOW", "INTU", "AMAT",
+    "JPM", "BAC", "WFC", "GS", "MS", "C", "BLK", "SCHW", "AXP", "V", "MA",
+    "UNH", "JNJ", "LLY", "PFE", "MRK", "ABBV", "TMO", "ABT", "AMGN",
+    "XOM", "CVX", "COP", "SLB", "EOG",
+    "WMT", "COST", "HD", "LOW", "MCD", "NKE", "SBUX", "TGT", "PG", "KO", "PEP",
+    "CAT", "DE", "HON", "GE", "BA", "UPS", "RTX", "LMT", "UNP",
+    "NEE", "DUK", "SO", "AMT", "PLD", "LIN", "DIS", "NFLX", "T", "VZ", "CMCSA",
+]
+
+# --- Live news catalyst overlay (see strategy/news_catalyst.py) ---
+ML_V2_NEWS_ENABLED = os.getenv("ML_V2_NEWS_ENABLED", "true").lower() == "true"
+ML_V2_NEWS_SYMBOL_LOOKBACK_HOURS = 24
+ML_V2_NEWS_MARKET_LOOKBACK_HOURS = 8
+ML_V2_NEWS_MARKET_TICKERS = ["SPY", "QQQ"]
+ML_V2_NEWS_VETO = 0.35            # |score| at/above this against the trade = no trade
+ML_V2_NEWS_MARKET_VETO = 0.45     # market-wide news needs to be clearer to veto
+ML_V2_NEWS_BOOST = 0.35           # aligned score at/above this ...
+ML_V2_NEWS_BOOST_PROB = 0.03      # ... lowers the probability bar by this much
+ML_V2_NEWS_EXIT = 0.45            # open trade + fresh opposing news this strong = exit alert
+ML_V2_NEWS_CACHE_SECONDS = 600
+# Optional LLM scoring of headlines (Claude). Off by default: it costs
+# money per call and the keyword scorer works without any API key. Needs
+# `pip install anthropic` and ANTHROPIC_API_KEY (or `ant auth login`).
+ML_V2_NEWS_LLM_ENABLED = os.getenv("ML_V2_NEWS_LLM_ENABLED", "false").lower() == "true"
+ML_V2_NEWS_LLM_MODEL = os.getenv("ML_V2_NEWS_LLM_MODEL", "claude-opus-5")
+
+# --- Training ---
+ML_V2_VAL_FRAC = 0.2              # middle block (by DATE) - model/threshold selection
+ML_V2_TEST_FRAC = 0.2             # last block (by DATE) - untouched, reported once
+# A threshold must keep at least this many validation trades, on enough
+# distinct days. The first long-only run chose a config off a 51-trade
+# slice that didn't hold up - with 8 configs x 21 thresholds tried, a
+# small or single-day slice looking good is mostly luck.
+ML_V2_MIN_TRADES_FOR_THRESHOLD = 30
+ML_V2_MIN_DAYS_FOR_THRESHOLD = 4      # ... spread over at least this many trading days
+
+# Portfolio-level cap: at most this many NEW V2 trades per day across ALL
+# symbols, first-come by time (what a single trader can actually take).
+# Without it, one strong up-day produced 394 of 453 test trades and the
+# whole "edge" was that one day - a per-trade t-stat of 3.3 that was 0.26
+# once trades were grouped by day. Applied in the trainer's evaluation
+# and in live_ml_v2.py.
+ML_V2_MAX_TRADES_PER_DAY = int(os.getenv("ML_V2_MAX_TRADES_PER_DAY", "10"))
+
+# Computed (and used by the hard vetoes / reason strings) but NOT fed to
+# the classifier. Each is ~constant within a day and drifts slowly across
+# days, so in a ~40-trading-day dataset it works as a date label: the
+# model gets ~26 real observations of it and memorises which WEEK was
+# good (the first run ranked raw VIX level #1 and its probabilities
+# shifted wholesale on the test days). Revisit once the context cache has
+# accumulated many months of history.
+ML_V2_EXCLUDE_FEATURES = [
+    "vix", "vix_vs_sma50", "vxn_vs_sma50",
+    "breadth_pct50", "breadth_chg5",
+    "qqq_vs_sma50_d", "spy_vs_sma50_d", "spy_vs_sma200_d",
+]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LIVE RESEARCH ALERTS + PAPER TRADING (paper_trading/research_live.py,
+# hooked into scan_once.py after the production alerts)
+#
+# Runs selected research strategies live on every scan: Telegram alert
+# per new signal, a paper trade filled/exited exactly like the backtest,
+# and an end-of-day report (win rate, expectancy, risk sweep, all-time
+# totals) after config.MARKET_CLOSE_HOUR. The production EMA-cross /
+# VWAP alerts in scan_once.py are unaffected - set
+# LIVE_RESEARCH_ENABLED=false to switch this whole block off.
+# ═══════════════════════════════════════════════════════════════════
+LIVE_RESEARCH_ENABLED = os.getenv("LIVE_RESEARCH_ENABLED", "true").lower() == "true"
+LIVE_RESEARCH_STRATEGIES = [s.strip() for s in os.getenv(
+    "LIVE_RESEARCH_STRATEGIES",
+    "K_RSI2_REVERSION,SCORE_ENGINE,L_ML_META,L_ML_META_V2,J_VWAP_BAND_REVERSION",
+).split(",") if s.strip()]
+LIVE_RESEARCH_DIRECTIONS = [d.strip() for d in os.getenv(
+    "LIVE_RESEARCH_DIRECTIONS", "long").split(",") if d.strip()]
+LIVE_RESEARCH_TELEGRAM = os.getenv("LIVE_RESEARCH_TELEGRAM", "true").lower() == "true"
+# Optional separate Telegram chat for research/paper alerts, so they don't
+# mix with the production alerts. Empty = same chat as production.
+LIVE_RESEARCH_CHAT_ID = os.getenv("LIVE_RESEARCH_CHAT_ID", "")
+# Where state lives between cron runs (the workflow caches this folder).
+LIVE_STATE_DIR = os.getenv("LIVE_STATE_DIR", "live_state")
+# A signal found late (e.g. the cron skipped a few runs) is still
+# paper-traded for backtest parity, but only alerted if its candle closed
+# within this many minutes - a 40-minute-old entry alert isn't actionable.
+LIVE_ALERT_MAX_AGE_MIN = 15
+# L_ML_META_V2 with its live context (fresh tape + news overlay). False =
+# backtest-identical V2 (no news), for strict parity.
+LIVE_RESEARCH_V2_LIVE_CONTEXT = os.getenv("LIVE_RESEARCH_V2_LIVE_CONTEXT", "true").lower() == "true"

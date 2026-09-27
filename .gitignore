@@ -2,3 +2,10 @@
 alerts_log.db
 __pycache__/
 *.pyc
+
+# Runtime state / large generated data - never commit
+live_state/
+backtest/ml/cache/
+backtest/ml/data/dataset_v2.csv
+paper_trading/ml_v2_positions.json
+paper_trading/ml_v2_trades.csv

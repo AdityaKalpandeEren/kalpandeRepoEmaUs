@@ -208,3 +208,62 @@ def build_research_trade(signal, entry_time, entry, exit_time, exit_price,
         position_size=round(position_size, 2),
         pnl_currency=round(gross * position_size, 2),
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# V2 EXIT SIMULATION (model L_ML_META_V2 only)
+# Same conservative stop-before-target rule as above, plus two exits
+# the other models don't have:
+#   SESSION_CLOSE - flatten at the regular-session close
+#       (config.ML_V2_FLAT_MIN), instead of riding thin after-hours
+#       prints to the 8pm square-off.
+#   SHOCK_EXIT - the backtestable form of "a bad catalyst hit the
+#       market while I was in the trade": QQQ moved hard against the
+#       position, or VIX spiked (for a long) / collapsed (for a short),
+#       since entry. Checked on each bar's CLOSE and filled at that
+#       close - i.e. only on information available at that moment.
+# Nothing above this line changed.
+# ═══════════════════════════════════════════════════════════════════
+
+def simulate_forward_v2(day_df, entry_idx: int, direction: str, entry: float,
+                        stop_loss: float, target: float, ctx=None):
+    """Returns (exit_time, exit_price, outcome, exit_idx). `ctx` is a
+    strategy.market_context.MarketContext (None disables SHOCK_EXIT)."""
+    from strategy.market_context import minutes_since_open
+
+    sign = 1.0 if direction == "long" else -1.0
+    use_shock = ctx is not None and _config.ML_V2_SHOCK_EXIT_ENABLED
+    qqq0 = vix0 = float("nan")
+    if use_shock and entry_idx > 0:
+        ref_ts = day_df.iloc[entry_idx - 1]["timestamp"]   # the signal candle
+        qqq0 = ctx.asof("QQQ", ref_ts)
+        vix0 = ctx.asof("VIX", ref_ts)
+
+    for i in range(entry_idx, len(day_df)):
+        row = day_df.iloc[i]
+        if direction == "long":
+            if row["low"] <= stop_loss:
+                return row["timestamp"], stop_loss, "STOP", i
+            if row["high"] >= target:
+                return row["timestamp"], target, "TARGET", i
+        else:
+            if row["high"] >= stop_loss:
+                return row["timestamp"], stop_loss, "STOP", i
+            if row["low"] <= target:
+                return row["timestamp"], target, "TARGET", i
+
+        if minutes_since_open(row["timestamp"]) >= _config.ML_V2_FLAT_MIN:
+            return row["timestamp"], float(row["close"]), "SESSION_CLOSE", i
+
+        if use_shock:
+            q = ctx.asof("QQQ", row["timestamp"])
+            if q == q and qqq0 == qqq0 and qqq0 > 0:
+                if sign * (q / qqq0 - 1.0) <= -_config.ML_V2_SHOCK_QQQ_PCT:
+                    return row["timestamp"], float(row["close"]), "SHOCK_EXIT", i
+            v = ctx.asof("VIX", row["timestamp"])
+            if v == v and vix0 == vix0 and vix0 > 0:
+                if sign * (v / vix0 - 1.0) >= _config.ML_V2_SHOCK_VIX_PCT:
+                    return row["timestamp"], float(row["close"]), "SHOCK_EXIT", i
+
+    last = day_df.iloc[-1]
+    return last["timestamp"], float(last["close"]), "EOD_SQUAREOFF", len(day_df) - 1
