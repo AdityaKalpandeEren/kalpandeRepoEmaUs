@@ -14,15 +14,15 @@ on:
     # is_market_hours() / session_over() (zoneinfo, DST-aware) decide what
     # each run actually does, so edge runs are cheap.
     #
-    # NOTE - every 2 minutes, not 5: GitHub's scheduler delays and silently
-    # drops scheduled runs under load (a */5 schedule often fires every
-    # 10-20+ min), which made alerts late. A denser schedule means enough
-    # runs survive. Overlapping triggers are safe: the concurrency group
-    # below queues them, and the research pass processes every candle
-    # closed since its last run, so nothing is skipped or double-booked.
-    - cron: "*/2 8-23 * * 1-5"
-    - cron: "*/2 0-1 * * 2-6"
-  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+    # NOTE - GitHub's scheduler delays and silently drops scheduled runs
+    # under load, so the PRIMARY trigger is an external cron-job.org job
+    # calling workflow_dispatch every 2 minutes. This schedule is only a
+    # backup. Duplicate triggers are safe: the concurrency group below
+    # queues them, and the research pass processes every candle closed
+    # since its last run, so nothing is skipped or double-booked.
+    - cron: "*/5 8-23 * * 1-5"
+    - cron: "*/5 0-1 * * 2-6"
+  workflow_dispatch: {}   # manual runs + the cron-job.org trigger (every 2 min)
 
 # One scan at a time: the research paper-trading state (live_state/) is
 # read at the start of a run and written at the end, so two overlapping
