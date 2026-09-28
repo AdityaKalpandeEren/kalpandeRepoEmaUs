@@ -83,20 +83,22 @@ def main():
             status = evaluate(symbol, df)
             print(f"{symbol}: {status}")
 
-            signal = check_signal(symbol, df)
-            if signal:
-                send_alert(format_signal_message(signal))
-                print(f">>> EMA-CROSS ALERT SENT: {symbol}")
+            # Production alerts - paused unless config.PRODUCTION_ALERTS_ENABLED.
+            if config.PRODUCTION_ALERTS_ENABLED:
+                signal = check_signal(symbol, df)
+                if signal:
+                    send_alert(format_signal_message(signal))
+                    print(f">>> EMA-CROSS ALERT SENT: {symbol}")
 
-            # retest = check_vwap_retest(symbol, df)
-            # if retest:
-            #     send_alert(format_retest_message(retest))
-            #     print(f">>> VWAP-RETEST ALERT SENT: {symbol} ({retest.aggressor})")
-            
-            retest = check_vwap_broad_TEST(symbol, df)
-            if retest:
-                send_alert(format_retest_message(retest))
-                print(f">>> [TEST] BROAD VWAP ALERT SENT: {symbol} ({retest.aggressor})")
+                # retest = check_vwap_retest(symbol, df)
+                # if retest:
+                #     send_alert(format_retest_message(retest))
+                #     print(f">>> VWAP-RETEST ALERT SENT: {symbol} ({retest.aggressor})")
+
+                retest = check_vwap_broad_TEST(symbol, df)
+                if retest:
+                    send_alert(format_retest_message(retest))
+                    print(f">>> [TEST] BROAD VWAP ALERT SENT: {symbol} ({retest.aggressor})")
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
             continue

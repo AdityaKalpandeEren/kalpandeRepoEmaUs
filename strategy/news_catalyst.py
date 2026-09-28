@@ -24,9 +24,10 @@ Scoring:
     Deliberately conservative - it only reacts to unambiguous catalyst
     language (beats/misses, guidance, upgrades/downgrades, probes,
     offerings, bankruptcy...) and ignores opinion-piece noise.
-  - optional (config.ML_V2_NEWS_LLM_ENABLED): Claude reads the same
-    headlines and returns a structured score. Falls back to the lexicon
-    on any error, so an API problem can never block the bot.
+  - optional (config.ML_V2_NEWS_LLM_ENABLED): an LLM - Google Gemini
+    (free tier, default) or Claude - reads the same headlines and returns
+    a structured score. Falls back to the lexicon on a missing key or any
+    error, so an API problem can never block the bot.
 """
 import json
 import math
@@ -277,7 +278,68 @@ _LLM_SYSTEM = (
 )
 
 
+_GEMINI_SCHEMA = {   # Gemini's responseSchema is an OpenAPI subset (no additionalProperties)
+    "type": "OBJECT",
+    "properties": {
+        "scores": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {"index": {"type": "INTEGER"}, "score": {"type": "NUMBER"}},
+                "required": ["index", "score"],
+            },
+        },
+    },
+    "required": ["scores"],
+}
+
+
+def _parse_scores(text: str, n: int) -> list:
+    data = json.loads(text)
+    scores = [0.0] * n
+    for s in data.get("scores", []):
+        i = int(s.get("index", -1))
+        if 0 <= i < n:
+            scores[i] = max(-1.0, min(1.0, float(s.get("score", 0.0))))
+    return scores
+
+
 def _llm_scores(ticker: str, titles: list):
+    """Per-headline scores from the configured LLM, or None on any failure
+    (the caller then uses the lexicon)."""
+    if config.ML_V2_NEWS_LLM_PROVIDER == "gemini":
+        return _gemini_scores(ticker, titles)
+    return _claude_scores(ticker, titles)
+
+
+def _gemini_scores(ticker: str, titles: list):
+    """Google Gemini via its REST API (free tier key from aistudio.google.com)."""
+    import requests
+    key = config.GEMINI_API_KEY
+    if not key:
+        return None
+    try:
+        listing = "\n".join(f"{i}. {t}" for i, t in enumerate(titles))
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{config.ML_V2_NEWS_LLM_MODEL}:generateContent")
+        resp = requests.post(url, headers={"x-goog-api-key": key}, timeout=20, json={
+            "systemInstruction": {"parts": [{"text": _LLM_SYSTEM}]},
+            "contents": [{"role": "user", "parts": [{"text": f"Ticker: {ticker}\nHeadlines:\n{listing}"}]}],
+            "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
+                                 "responseSchema": _GEMINI_SCHEMA},
+        })
+        if resp.status_code != 200:
+            print(f"[news] Gemini {resp.status_code} for {ticker}, using lexicon: {resp.text[:200]}")
+            return None
+        parts = resp.json()["candidates"][0]["content"]["parts"]
+        text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+        return _parse_scores(text, len(titles)) if text else None
+    except Exception as e:
+        print(f"[news] Gemini scoring failed for {ticker}, using lexicon: {e!r}")
+        return None
+
+
+def _claude_scores(ticker: str, titles: list):
     """Per-headline scores from Claude, or None on any failure."""
     global _llm_client
     try:
@@ -306,13 +368,7 @@ def _llm_scores(ticker: str, titles: list):
         text = next((b.text for b in response.content if b.type == "text"), None)
         if not text:
             return None
-        data = json.loads(text)
-        scores = [0.0] * len(titles)
-        for s in data.get("scores", []):
-            i = int(s.get("index", -1))
-            if 0 <= i < len(titles):
-                scores[i] = max(-1.0, min(1.0, float(s.get("score", 0.0))))
-        return scores
+        return _parse_scores(text, len(titles))
     except Exception as e:
         print(f"[news] LLM scoring failed for {ticker}, using lexicon: {e!r}")
         return None

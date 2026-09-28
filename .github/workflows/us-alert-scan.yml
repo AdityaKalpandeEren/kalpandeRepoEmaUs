@@ -2,14 +2,16 @@ name: US Alert Scan
 
 on:
   schedule:
-    # US market hours are 9:30 AM-4:00 PM ET, which is 13:30-20:00 UTC
-    # during EDT (summer) or 14:30-21:00 UTC during EST (winter). Rather
-    # than maintain two separate cron schedules for the DST switch, this
-    # covers the superset (13:00-21:59 UTC) every 5 minutes, weekdays -
-    # scan_once.py's own is_market_hours() (zoneinfo-based, correctly
-    # DST-aware) exits immediately outside the real session, so the
-    # extra scheduled runs on either edge just cost a few wasted seconds.
-    - cron: "*/5 13-21 * * 1-5"
+    # Scans run from 9:00 AM ET through the 8:00 PM ET after-hours close
+    # (config.MARKET_CLOSE_HOUR). The research paper trades square off on
+    # the day's last candle (19:55 ET) and the EOD report goes out on the
+    # first run after 20:00 ET, so the schedule must reach past 20:00 ET:
+    # that is 00:00 UTC (EDT) / 01:00 UTC (EST) on the NEXT UTC day, hence
+    # the second line on Tue-Sat. Both lines cover the DST superset -
+    # scan_once.py's is_market_hours() / session_over() (zoneinfo, DST-
+    # aware) decide what each run actually does, so edge runs are cheap.
+    - cron: "*/5 13-23 * * 1-5"
+    - cron: "*/5 0-1 * * 2-6"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 # One scan at a time: the research paper-trading state (live_state/) is
@@ -53,8 +55,15 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Optional: a separate chat for research/paper alerts + EOD report.
-          LIVE_RESEARCH_CHAT_ID: ${{ secrets.LIVE_RESEARCH_CHAT_ID }}
+          # Research/paper alerts + EOD report go to the same chat as
+          # production (LIVE_RESEARCH_CHAT_ID left unset).
+          # Gemini (free tier) scoring of news headlines for L_ML_META_V2;
+          # falls back to the keyword lexicon if the key is missing or
+          # the API errors.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Production EMA-cross / VWAP alerts: paused by default. Set the
+          # repo variable PRODUCTION_ALERTS_ENABLED=true to resume them.
+          PRODUCTION_ALERTS_ENABLED: ${{ vars.PRODUCTION_ALERTS_ENABLED || 'false' }}
 
       - name: Save paper-trading state
         if: always()

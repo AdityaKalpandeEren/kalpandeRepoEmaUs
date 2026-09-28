@@ -24,8 +24,13 @@ RETEST_TREND_LOOKBACK = 5        # how many prior candles to check for an establ
 RETEST_MIN_CANDLES_ABOVE = 3     # at least this many of those prior candles must close above VWAP
 RETEST_TOUCH_BUFFER_PCT = 0.001  # 0.1% buffer - counts as "touching" VWAP even if it doesn't hit exactly
 
+# --- Production alerts (scan_once.py EMA-cross + broad VWAP test) ---
+# Paused for now so only the research strategies (LIVE_RESEARCH_*) alert.
+# Set PRODUCTION_ALERTS_ENABLED=true (env / GitHub repo variable) to resume.
+PRODUCTION_ALERTS_ENABLED = os.getenv("PRODUCTION_ALERTS_ENABLED", "false").lower() == "true"
+
 # --- Runtime ---
-POLL_SECONDS = 60                # how often the loop checks for new candles
+POLL_SECONDS = 60               # how often the loop checks for new candles
 SKIP_FIRST_MINUTES = 15          # ignore signals in first 15 min after market open
 
 # --- Session hours ---
@@ -366,11 +371,16 @@ ML_V2_NEWS_BOOST = 0.35           # aligned score at/above this ...
 ML_V2_NEWS_BOOST_PROB = 0.03      # ... lowers the probability bar by this much
 ML_V2_NEWS_EXIT = 0.45            # open trade + fresh opposing news this strong = exit alert
 ML_V2_NEWS_CACHE_SECONDS = 600
-# Optional LLM scoring of headlines (Claude). Off by default: it costs
-# money per call and the keyword scorer works without any API key. Needs
-# `pip install anthropic` and ANTHROPIC_API_KEY (or `ant auth login`).
-ML_V2_NEWS_LLM_ENABLED = os.getenv("ML_V2_NEWS_LLM_ENABLED", "false").lower() == "true"
-ML_V2_NEWS_LLM_MODEL = os.getenv("ML_V2_NEWS_LLM_MODEL", "claude-opus-5")
+# LLM scoring of headlines. On by default with Google Gemini's FREE tier
+# (key from aistudio.google.com, no billing) - set GEMINI_API_KEY. With no
+# key, or on any API error (incl. free-tier rate limits), it falls back to
+# the keyword scorer, so it can never block the bot.
+# Provider "anthropic" = Claude instead (paid; needs ANTHROPIC_API_KEY and
+# a Claude model id in ML_V2_NEWS_LLM_MODEL).
+ML_V2_NEWS_LLM_ENABLED = os.getenv("ML_V2_NEWS_LLM_ENABLED", "true").lower() == "true"
+ML_V2_NEWS_LLM_PROVIDER = os.getenv("ML_V2_NEWS_LLM_PROVIDER", "gemini").lower()
+ML_V2_NEWS_LLM_MODEL = os.getenv("ML_V2_NEWS_LLM_MODEL", "gemini-flash-latest")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # --- Training ---
 ML_V2_VAL_FRAC = 0.2              # middle block (by DATE) - model/threshold selection
