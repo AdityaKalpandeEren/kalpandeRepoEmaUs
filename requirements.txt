@@ -1,4 +1,11 @@
-yfinance>=0.2.40
+yfinance>=1.7.0
+curl_cffi>=0.7,<1.0
 pandas
 requests
 python-dotenv
+# Pinned: the committed ML models (backtest/ml/model/*.joblib) were trained
+# with this exact version - a different one can fail to load them or
+# silently score differently.
+scikit-learn==1.7.2
+joblib
+numpy

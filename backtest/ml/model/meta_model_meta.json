@@ -1,0 +1,30 @@
+{
+  "trained_at": "2026-09-26T14:01:58.384468+00:00",
+  "dataset": "backtest/ml/data/dataset.csv",
+  "rows_total": 11226,
+  "rows_train": 7858,
+  "rows_test": 3368,
+  "train_range": [
+    "2026-08-12 10:25:00+00:00",
+    "2026-09-14 12:35:00+00:00"
+  ],
+  "test_range": [
+    "2026-09-14 12:40:00+00:00",
+    "2026-09-25 23:45:00+00:00"
+  ],
+  "baseline_oos": {
+    "n": 3368,
+    "win_pct": 39.2,
+    "exp_r": -0.155,
+    "tot_r": -522.35,
+    "t_stat": -7.57
+  },
+  "filtered_oos_at_min_prob": {
+    "n": 206,
+    "win_pct": 37.4,
+    "exp_r": -0.172,
+    "tot_r": -35.45,
+    "t_stat": -2.23
+  },
+  "min_prob_used_for_report": 0.55
+}

@@ -33,13 +33,48 @@ def is_market_hours() -> bool:
     return active_from <= now <= close_t
 
 
+def _research_after_close(now):
+    """After the session close: final paper-trade exits + the EOD report,
+    once per day (paper_trading/research_live.py). No-op otherwise."""
+    if not config.LIVE_RESEARCH_ENABLED or now.weekday() >= 5:
+        return
+    from paper_trading.research_live import ResearchPass, session_over
+    if not session_over(now):
+        return
+    rp = ResearchPass(now)
+    if rp.begin():
+        try:
+            rp.finish_day(lambda s: get_intraday_candles(s, config.CANDLE_INTERVAL_MINUTES))
+        finally:
+            rp.end()
+
+
 def main():
     now = datetime.now(MARKET_TZ)
     if not is_market_hours():
         print(f"[{now.strftime('%H:%M:%S')} ET] Outside market hours - skipping this pass.")
+        try:
+            _research_after_close(now)
+        except Exception as e:
+            print(f"Research EOD error: {e!r}")
         return
 
     watchlist = load_watchlist()
+
+    # Research strategies: live alerts + paper trading (config.LIVE_RESEARCH_*).
+    # Runs on the same candles fetched below, AFTER the production checks for
+    # each symbol, and any failure in it is contained so it can never stop a
+    # production alert from going out.
+    research = None
+    if config.LIVE_RESEARCH_ENABLED:
+        try:
+            from paper_trading.research_live import ResearchPass
+            research = ResearchPass(now)
+            if not research.begin():
+                research = None
+        except Exception as e:
+            print(f"Research pass disabled this run: {e!r}")
+            research = None
 
     for symbol in watchlist:
         try:
@@ -48,22 +83,37 @@ def main():
             status = evaluate(symbol, df)
             print(f"{symbol}: {status}")
 
-            signal = check_signal(symbol, df)
-            if signal:
-                send_alert(format_signal_message(signal))
-                print(f">>> EMA-CROSS ALERT SENT: {symbol}")
+            # Production alerts - paused unless config.PRODUCTION_ALERTS_ENABLED.
+            if config.PRODUCTION_ALERTS_ENABLED:
+                signal = check_signal(symbol, df)
+                if signal:
+                    send_alert(format_signal_message(signal))
+                    print(f">>> EMA-CROSS ALERT SENT: {symbol}")
 
-            # retest = check_vwap_retest(symbol, df)
-            # if retest:
-            #     send_alert(format_retest_message(retest))
-            #     print(f">>> VWAP-RETEST ALERT SENT: {symbol} ({retest.aggressor})")
-            
-            retest = check_vwap_broad_TEST(symbol, df)
-            if retest:
-                send_alert(format_retest_message(retest))
-                print(f">>> [TEST] BROAD VWAP ALERT SENT: {symbol} ({retest.aggressor})")
+                # retest = check_vwap_retest(symbol, df)
+                # if retest:
+                #     send_alert(format_retest_message(retest))
+                #     print(f">>> VWAP-RETEST ALERT SENT: {symbol} ({retest.aggressor})")
+
+                retest = check_vwap_broad_TEST(symbol, df)
+                if retest:
+                    send_alert(format_retest_message(retest))
+                    print(f">>> [TEST] BROAD VWAP ALERT SENT: {symbol} ({retest.aggressor})")
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
+            continue
+
+        if research is not None:
+            try:
+                research.process_symbol(symbol, df)
+            except Exception as e:
+                print(f"Research error on {symbol}: {e!r}")
+
+    if research is not None:
+        try:
+            research.end()
+        except Exception as e:
+            print(f"Research end-of-pass error: {e!r}")
 
 
 if __name__ == "__main__":

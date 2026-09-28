@@ -1,0 +1,107 @@
+"""
+Historical backtest for the US bot's EMA-cross / VWAP-retest /
+VWAP-broad-test signals - answers "how often would these alerts
+actually have won?" using real Yahoo Finance historical candles,
+walked forward exactly the way the live bot sees them (see
+backtest/simulator.py and strategy/trade_engine.py docstrings for the
+no-lookahead / fill rules).
+
+Usage examples (run from the us_alert_bot/ directory):
+
+    python -m backtest.run_backtest --from 2025-08-15 --to 2025-09-14
+
+    python -m backtest.run_backtest --symbols AAPL,MSFT,NVDA \\
+        --from 2025-08-15 --to 2025-09-14
+
+    python -m backtest.run_backtest --from 2025-08-15 --to 2025-09-14 \\
+        --strategies EMA_CROSS,VWAP_RETEST
+
+Notes:
+- No API key needed - yfinance is free and keyless.
+- Yahoo's intraday history only goes back so far: ~30 days for 1-minute
+  bars, ~60 days for 5/15/30-minute bars. A --from date older than that
+  for your --interval will just return fewer days than you asked for,
+  not an error - widen --interval or narrow the range if a run comes
+  back with far fewer trading days than expected.
+- If a fetch fails outright (not just "no data", an actual exception)
+  and the error mentions curl_cffi, SSL/TLS, or "requires curl_cffi
+  session" - that's a yfinance dependency problem in your environment,
+  not a bug here. See README "Testing on historical data" for the fix.
+- Results are written to backtest/results/ as a CSV (every simulated
+  trade) and a Markdown summary report.
+"""
+import argparse
+import sys
+
+import config
+from backtest.data_loader import load_symbol_history, group_by_day
+from backtest.simulator import simulate_day, STRATEGIES
+from paper_trading.report import write_report, print_summary
+
+
+def load_symbol_list(filename: str) -> list:
+    with open(filename) as f:
+        return [line.strip() for line in f if line.strip() and not line.startswith("#")]
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--symbols", help="Comma-separated tickers. Defaults to watchlist.txt.")
+    p.add_argument("--from", dest="from_date", required=True, help="YYYY-MM-DD")
+    p.add_argument("--to", dest="to_date", required=True, help="YYYY-MM-DD")
+    p.add_argument("--interval", type=int, default=config.CANDLE_INTERVAL_MINUTES,
+                    help=f"Candle size in minutes (default: {config.CANDLE_INTERVAL_MINUTES}, matches config.py)")
+    p.add_argument("--strategies", default="EMA_CROSS,VWAP_RETEST,VWAP_BROAD_TEST",
+                    help="Comma-separated subset of EMA_CROSS,VWAP_RETEST,VWAP_BROAD_TEST")
+    p.add_argument("--out", default="backtest/results", help="Output directory for the CSV + report")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    symbols = [s.strip() for s in args.symbols.split(",")] if args.symbols else load_symbol_list("watchlist.txt")
+    strategy_names = [s.strip() for s in args.strategies.split(",")]
+    strategies = {k: v for k, v in STRATEGIES.items() if k in strategy_names}
+    if not strategies:
+        print(f"No valid strategies in '{args.strategies}'. Choose from: {list(STRATEGIES)}")
+        sys.exit(1)
+
+    print(f"Backtesting {len(symbols)} symbol(s) from {args.from_date} to {args.to_date}, "
+          f"{args.interval}-min candles, strategies: {list(strategies)}\n")
+
+    all_trades = []
+    for symbol in symbols:
+        print(f"Fetching {symbol} ...")
+        try:
+            hist = load_symbol_history(symbol, args.interval, args.from_date, args.to_date)
+        except Exception as e:
+            print(f"  FAILED for {symbol}: {e}")
+            continue
+
+        days = group_by_day(hist)
+        if not days:
+            print("  no historical candles returned for this range")
+            continue
+        print(f"  {len(days)} trading day(s) of data")
+
+        for day, day_df in days.items():
+            trades = simulate_day(symbol, day_df, strategies)
+            all_trades.extend(trades)
+            if trades:
+                detail = ", ".join(f"{t.strategy}:{t.outcome}({t.r_multiple}R)" for t in trades)
+                print(f"    {day}: {detail}")
+
+    print(f"\nTotal trades simulated: {len(all_trades)}")
+    if not all_trades:
+        print("Nothing to report - try a wider date range, more symbols, or looser strategies.")
+        return
+
+    result = write_report(all_trades, args.out, label="backtest")
+    print_summary(result["summary"])
+    print(f"\nSaved trade log:   {result['csv']}")
+    print(f"Saved summary:     {result['report']}")
+
+
+if __name__ == "__main__":
+    main()
