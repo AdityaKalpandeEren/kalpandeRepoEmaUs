@@ -29,8 +29,10 @@ Scoring:
     a structured score. Falls back to the lexicon on a missing key or any
     error, so an API problem can never block the bot.
 """
+import hashlib
 import json
 import math
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -312,8 +314,25 @@ def _llm_scores(ticker: str, titles: list):
     return _claude_scores(ticker, titles)
 
 
+def _llm_error_detail(resp) -> str:
+    """Compact, complete error: status, message and which quota was hit
+    (per-minute vs per-day) with Google's suggested retry delay."""
+    try:
+        err = resp.json().get("error", {})
+    except Exception:
+        return resp.text[:1000]
+    parts = [f"{err.get('status', '')}: {err.get('message', '')}"]
+    for d in err.get("details", []):
+        for v in d.get("violations", []):
+            parts.append(f"quota={v.get('quotaId') or v.get('quotaMetric')} limit={v.get('quotaValue', '?')}")
+        if d.get("retryDelay"):
+            parts.append(f"retryDelay={d['retryDelay']}")
+    return " | ".join(parts)[:1000]
+
+
 def _gemini_scores(ticker: str, titles: list):
     """Google Gemini via its REST API (free tier key from aistudio.google.com)."""
+    global _llm_blocked
     import requests
     key = config.GEMINI_API_KEY
     if not key:
@@ -329,7 +348,15 @@ def _gemini_scores(ticker: str, titles: list):
                                  "responseSchema": _GEMINI_SCHEMA},
         })
         if resp.status_code != 200:
-            print(f"[news] Gemini {resp.status_code} for {ticker}, using lexicon: {resp.text[:200]}")
+            if resp.status_code in (429, 500, 503):
+                # Rate limit / overload: more calls this run would fail the
+                # same way - lexicon for the rest of this process.
+                _llm_blocked = True
+                print(f"[news] Gemini {resp.status_code} for {ticker} - LLM paused for the rest "
+                      f"of this run, using lexicon. {_llm_error_detail(resp)}")
+            else:
+                print(f"[news] Gemini {resp.status_code} for {ticker}, using lexicon: "
+                      f"{_llm_error_detail(resp)}")
             return None
         parts = resp.json()["candidates"][0]["content"]["parts"]
         text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
@@ -375,6 +402,75 @@ def _claude_scores(ticker: str, titles: list):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Persistent LLM score cache
+#
+# scan_once.py is a fresh process every run (every ~2 min on GitHub), so
+# the in-memory cache below never survives between runs - without this,
+# every run re-sent the same headlines to the LLM and the free-tier quota
+# ran out within minutes. A headline's score doesn't change, so each
+# (provider, model, ticker, headline) is scored ONCE and kept in
+# config.LIVE_STATE_DIR (which the workflow carries between runs).
+# ═══════════════════════════════════════════════════════════════════
+_SCORE_CACHE_FILE = "news_llm_scores.json"
+_SCORE_CACHE_DAYS = 3           # headlines older than the lookbacks are never asked again
+_score_cache = None             # key -> [score, scored_at_epoch]
+_llm_blocked = False            # set on 429/503: rest of this process uses the lexicon
+
+
+def _score_cache_path() -> str:
+    os.makedirs(config.LIVE_STATE_DIR, exist_ok=True)
+    return os.path.join(config.LIVE_STATE_DIR, _SCORE_CACHE_FILE)
+
+
+def _load_score_cache() -> dict:
+    global _score_cache
+    if _score_cache is None:
+        try:
+            with open(_score_cache_path()) as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        cutoff = time.time() - _SCORE_CACHE_DAYS * 86400
+        _score_cache = {k: v for k, v in data.items()
+                        if isinstance(v, list) and len(v) == 2 and v[1] >= cutoff}
+    return _score_cache
+
+
+def _save_score_cache():
+    try:
+        path = _score_cache_path()
+        tmp = f"{path}.tmp.{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump(_score_cache, f)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[news] could not save LLM score cache: {e!r}")
+
+
+def _score_key(ticker: str, text: str) -> str:
+    raw = f"{config.ML_V2_NEWS_LLM_PROVIDER}|{config.ML_V2_NEWS_LLM_MODEL}|{ticker}|{text}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _cached_llm_scores(ticker: str, texts: list) -> list:
+    """LLM score per text, or None where there is none (never scored and
+    the LLM is unavailable). Only headlines never scored before are sent."""
+    cache = _load_score_cache()
+    keys = [_score_key(ticker, t) for t in texts]
+    out = [cache[k][0] if k in cache else None for k in keys]
+    todo = [i for i, s in enumerate(out) if s is None]
+    if todo and not _llm_blocked:
+        fresh = _llm_scores(ticker, [texts[i] for i in todo])
+        if fresh is not None:
+            now = time.time()
+            for i, s in zip(todo, fresh):
+                out[i] = s
+                cache[keys[i]] = [s, now]
+            _save_score_cache()
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Aggregate
 # ═══════════════════════════════════════════════════════════════════
 _cache = {}   # (ticker, lookback) -> (fetched_at, CatalystRead)
@@ -384,14 +480,17 @@ def _aggregate(ticker: str, items: list, now: datetime) -> CatalystRead:
     if not items:
         return CatalystRead(method="none")
     titles = [f"{t}. {s}" if s else t for _, t, s in items]
-    scores = None
+    lexicon = [score_headline(t) for _, t, _ in items]
+    scores = lexicon
     method = "lexicon"
     if config.ML_V2_NEWS_LLM_ENABLED:
-        scores = _llm_scores(ticker, titles)
-        if scores is not None:
-            method = "llm"
-    if scores is None:
-        scores = [score_headline(t) for _, t, _ in items]
+        llm = _cached_llm_scores(ticker, titles)
+        n_llm = sum(s is not None for s in llm)
+        if n_llm:
+            # LLM score where one exists, lexicon for any headline the LLM
+            # couldn't score this run (quota) - same veto/boost rules either way.
+            scores = [s if s is not None else x for s, x in zip(llm, lexicon)]
+            method = "llm" if n_llm == len(llm) else "llm+lexicon"
 
     # Recency weighting: a 1-hour-old headline counts ~2x a 6-hour-old one.
     num = den = 0.0
