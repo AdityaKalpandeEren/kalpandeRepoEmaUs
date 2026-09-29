@@ -337,33 +337,41 @@ def _gemini_scores(ticker: str, titles: list):
     key = config.GEMINI_API_KEY
     if not key:
         return None
-    try:
-        listing = "\n".join(f"{i}. {t}" for i, t in enumerate(titles))
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{config.ML_V2_NEWS_LLM_MODEL}:generateContent")
-        resp = requests.post(url, headers={"x-goog-api-key": key}, timeout=20, json={
-            "systemInstruction": {"parts": [{"text": _LLM_SYSTEM}]},
-            "contents": [{"role": "user", "parts": [{"text": f"Ticker: {ticker}\nHeadlines:\n{listing}"}]}],
-            "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
-                                 "responseSchema": _GEMINI_SCHEMA},
-        })
-        if resp.status_code != 200:
-            if resp.status_code in (429, 500, 503):
-                # Rate limit / overload: more calls this run would fail the
-                # same way - lexicon for the rest of this process.
-                _llm_blocked = True
-                print(f"[news] Gemini {resp.status_code} for {ticker} - LLM paused for the rest "
-                      f"of this run, using lexicon. {_llm_error_detail(resp)}")
-            else:
-                print(f"[news] Gemini {resp.status_code} for {ticker}, using lexicon: "
-                      f"{_llm_error_detail(resp)}")
+    listing = "\n".join(f"{i}. {t}" for i, t in enumerate(titles))
+    body = {
+        "systemInstruction": {"parts": [{"text": _LLM_SYSTEM}]},
+        "contents": [{"role": "user", "parts": [{"text": f"Ticker: {ticker}\nHeadlines:\n{listing}"}]}],
+        "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
+                             "responseSchema": _GEMINI_SCHEMA},
+    }
+    # Main model first; on an overload (500/503) the fallback model once.
+    fallback = config.ML_V2_NEWS_LLM_FALLBACK_MODEL
+    models = [config.ML_V2_NEWS_LLM_MODEL] + ([fallback] if fallback and fallback != config.ML_V2_NEWS_LLM_MODEL else [])
+    for i, model in enumerate(models):
+        try:
+            resp = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                 headers={"x-goog-api-key": key}, timeout=20, json=body)
+            if resp.status_code == 200:
+                parts = resp.json()["candidates"][0]["content"]["parts"]
+                text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+                return _parse_scores(text, len(titles)) if text else None
+        except Exception as e:
+            print(f"[news] Gemini scoring failed for {ticker} ({model}), using lexicon: {e!r}")
             return None
-        parts = resp.json()["candidates"][0]["content"]["parts"]
-        text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
-        return _parse_scores(text, len(titles)) if text else None
-    except Exception as e:
-        print(f"[news] Gemini scoring failed for {ticker}, using lexicon: {e!r}")
+        if resp.status_code in (500, 503) and i + 1 < len(models):
+            print(f"[news] Gemini {resp.status_code} on {model} for {ticker} - trying {models[i + 1]}")
+            continue
+        if resp.status_code in (429, 500, 503):
+            # Rate limit / overload on every model: more calls this run would
+            # fail the same way - lexicon for the rest of this process.
+            _llm_blocked = True
+            print(f"[news] Gemini {resp.status_code} on {model} for {ticker} - LLM paused for the rest "
+                  f"of this run, using lexicon. {_llm_error_detail(resp)}")
+        else:
+            print(f"[news] Gemini {resp.status_code} on {model} for {ticker}, using lexicon: "
+                  f"{_llm_error_detail(resp)}")
         return None
+    return None
 
 
 def _claude_scores(ticker: str, titles: list):
