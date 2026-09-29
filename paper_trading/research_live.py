@@ -1,8 +1,9 @@
 """
 Live Telegram alerts + paper trading for selected RESEARCH strategies
 (config.LIVE_RESEARCH_STRATEGIES - by default K_RSI2_REVERSION,
-SCORE_ENGINE, L_ML_META, L_ML_META_V2, J_VWAP_BAND_REVERSION), long only,
-with an end-of-day report in the same format as backtest/run_research.py.
+SCORE_ENGINE, L_ML_META, L_ML_META_V2, L_ML_META_V2_2, J_VWAP_BAND_REVERSION),
+long only, with an end-of-day report in the same format as
+backtest/run_research.py.
 
 Designed for scan_once.py's execution model: a short process started by
 a cron trigger at ANY minute (not aligned to candle boundaries), that
@@ -160,7 +161,7 @@ def _selected_models() -> dict:
         if unknown:
             print(f"[research-live] unknown strategies ignored: {unknown}")
         _models = {k: ENTRY_MODELS[k] for k in wanted if k in ENTRY_MODELS}
-        if "L_ML_META_V2" in _models:
+        if "L_ML_META_V2" in _models or "L_ML_META_V2_2" in _models:
             # V2's live mode: fresh VIX/QQQ tape + news overlay.
             from strategy.market_context import set_live_mode
             set_live_mode(config.LIVE_RESEARCH_V2_LIVE_CONTEXT)

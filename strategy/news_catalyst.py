@@ -535,14 +535,14 @@ def _cached_llm_scores(ticker: str, texts: list) -> list:
 _cache = {}   # (ticker, lookback) -> (fetched_at, CatalystRead)
 
 
-def _aggregate(ticker: str, items: list, now: datetime) -> CatalystRead:
+def _aggregate(ticker: str, items: list, now: datetime, use_llm: bool = True) -> CatalystRead:
     if not items:
         return CatalystRead(method="none")
     titles = [f"{t}. {s}" if s else t for _, t, s in items]
     lexicon = [score_headline(t) for _, t, _ in items]
     scores = lexicon
     method = "lexicon"
-    if config.ML_V2_NEWS_LLM_ENABLED:
+    if use_llm and config.ML_V2_NEWS_LLM_ENABLED:
         llm = _cached_llm_scores(ticker, titles)
         n_llm = sum(s is not None for s in llm)
         if n_llm:
@@ -574,24 +574,42 @@ def _aggregate(ticker: str, items: list, now: datetime) -> CatalystRead:
                         headlines=[t for _, t, _ in items[:5]])
 
 
-def read_catalyst(ticker: str, lookback_hours: float = None, market: bool = False) -> CatalystRead:
-    """Cached catalyst read for one ticker."""
+def read_catalyst(ticker: str, lookback_hours: float = None, market: bool = False,
+                  use_llm: bool = True) -> CatalystRead:
+    """Cached catalyst read for one ticker. use_llm=False scores with the
+    keyword lexicon only - never calls the LLM (L_ML_META_V2_2)."""
     lookback_hours = lookback_hours or config.ML_V2_NEWS_SYMBOL_LOOKBACK_HOURS
-    key = (ticker, lookback_hours, market)
+    key = (ticker, lookback_hours, market, use_llm)
     hit = _cache.get(key)
     if hit and time.time() - hit[0] < config.ML_V2_NEWS_CACHE_SECONDS:
         return hit[1]
     now = datetime.now(timezone.utc)
-    read = _aggregate(ticker, fetch_headlines(ticker, lookback_hours, now, market), now)
+    items = _headlines_cached(ticker, lookback_hours, now, market)
+    read = _aggregate(ticker, items, now, use_llm)
     _cache[key] = (time.time(), read)
     return read
 
 
-def read_market_catalyst() -> CatalystRead:
+_headline_cache = {}   # (ticker, lookback, market) -> (fetched_at, items)
+
+
+def _headlines_cached(ticker, lookback_hours, now, market):
+    """One headline fetch per ticker per cache window, shared by the LLM and
+    lexicon reads so V2 and V2_2 don't fetch the same feed twice."""
+    key = (ticker, lookback_hours, market)
+    hit = _headline_cache.get(key)
+    if hit and time.time() - hit[0] < config.ML_V2_NEWS_CACHE_SECONDS:
+        return hit[1]
+    items = fetch_headlines(ticker, lookback_hours, now, market)
+    _headline_cache[key] = (time.time(), items)
+    return items
+
+
+def read_market_catalyst(use_llm: bool = True) -> CatalystRead:
     """Broad-market read from the index ETFs' own news feeds. The
     strongest reading (by magnitude) wins, so one clear macro shock in
     either feed isn't averaged away by the other feed's noise."""
-    reads = [read_catalyst(t, config.ML_V2_NEWS_MARKET_LOOKBACK_HOURS, market=True)
+    reads = [read_catalyst(t, config.ML_V2_NEWS_MARKET_LOOKBACK_HOURS, market=True, use_llm=use_llm)
              for t in config.ML_V2_NEWS_MARKET_TICKERS]
     reads = [r for r in reads if r.n_items]
     if not reads:
@@ -599,13 +617,13 @@ def read_market_catalyst() -> CatalystRead:
     return max(reads, key=lambda r: abs(r.score))
 
 
-def entry_decision(symbol: str, direction: str):
+def entry_decision(symbol: str, direction: str, use_llm: bool = True):
     """(veto_reason_or_None, prob_adjustment, symbol_read, market_read).
 
     prob_adjustment is <= 0: subtracted from the probability floor when
     the catalyst is aligned with the trade."""
-    sym = read_catalyst(symbol)
-    mkt = read_market_catalyst()
+    sym = read_catalyst(symbol, use_llm=use_llm)
+    mkt = read_market_catalyst(use_llm=use_llm)
     sign = 1.0 if direction == "long" else -1.0
     s_al, m_al = sign * sym.score, sign * mkt.score
     if s_al <= -config.ML_V2_NEWS_VETO:
