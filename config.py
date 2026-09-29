@@ -379,7 +379,11 @@ ML_V2_NEWS_CACHE_SECONDS = 600
 # a Claude model id in ML_V2_NEWS_LLM_MODEL).
 ML_V2_NEWS_LLM_ENABLED = os.getenv("ML_V2_NEWS_LLM_ENABLED", "true").lower() == "true"
 ML_V2_NEWS_LLM_PROVIDER = os.getenv("ML_V2_NEWS_LLM_PROVIDER", "gemini").lower()
-ML_V2_NEWS_LLM_MODEL = os.getenv("ML_V2_NEWS_LLM_MODEL", "gemini-flash-latest")
+# flash-lite: higher free-tier limits, and in live testing (2026-09-29) it
+# answered while gemini-flash-latest returned 503 "high demand" on every
+# call. On a 500/503 the fallback model is tried once before giving up.
+ML_V2_NEWS_LLM_MODEL = os.getenv("ML_V2_NEWS_LLM_MODEL", "gemini-flash-lite-latest")
+ML_V2_NEWS_LLM_FALLBACK_MODEL = os.getenv("ML_V2_NEWS_LLM_FALLBACK_MODEL", "gemini-flash-latest")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # --- Training ---
