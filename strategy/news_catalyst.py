@@ -213,22 +213,73 @@ def _parse_item(item: dict):
     return title, summary, ts
 
 
+_GNEWS_SOURCE_RX = re.compile(r"\s+-\s+[^-]{2,60}$")   # "Title - Publisher"
+
+
+def _yahoo_search_items(ticker: str) -> list:
+    """Yahoo news via the search endpoint. yf.Ticker(t).news (the
+    /xhr/ncp endpoint) has returned HTTP 500 on every call since
+    ~2026-09-28 midday ET, so every read came back empty."""
+    import yfinance as yf
+    try:
+        raw = yf.Search(ticker, news_count=config.ML_V2_NEWS_FETCH_COUNT,
+                        max_results=0, raise_errors=False).news or []
+    except Exception as e:
+        print(f"[news] Yahoo search failed for {ticker}: {e!r}"[:200])
+        return []
+    return [_parse_item(item) for item in raw]
+
+
+def _google_news_items(ticker: str, lookback_hours: float, market: bool) -> list:
+    """Google News RSS search - the fallback when Yahoo returns nothing."""
+    import requests
+    from email.utils import parsedate_to_datetime
+    from urllib.parse import quote_plus
+    import xml.etree.ElementTree as ET
+    days = max(1, math.ceil(lookback_hours / 24))
+    q = f"stock market when:{days}d" if market else f"{ticker} stock when:{days}d"
+    url = f"https://news.google.com/rss/search?q={quote_plus(q)}&hl=en-US&gl=US&ceid=US:en"
+    try:
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+    except Exception as e:
+        print(f"[news] Google News failed for {ticker}: {e!r}"[:200])
+        return []
+    out = []
+    for item in root.iter("item"):
+        title = _GNEWS_SOURCE_RX.sub("", (item.findtext("title") or "").strip())
+        try:
+            ts = parsedate_to_datetime(item.findtext("pubDate") or "")
+            ts = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        except Exception:
+            ts = None
+        out.append((title, "", ts))
+    return out[: config.ML_V2_NEWS_FETCH_COUNT]
+
+
 def fetch_headlines(ticker: str, lookback_hours: float, now: datetime = None,
                     market: bool = False) -> list:
     """[(published_utc, title, summary)] newer than lookback_hours and
     relevant: about this company (symbol feeds) or about the market /
-    macro backdrop (market feeds)."""
-    import yfinance as yf
+    macro backdrop (market feeds). Yahoo search first, Google News RSS
+    when Yahoo has nothing fresh and relevant."""
     now = now or datetime.now(timezone.utc)
-    try:
-        raw = yf.Ticker(ticker).news or []
-    except Exception:
-        return []
-    out = []
-    for item in raw:
-        title, summary, ts = _parse_item(item)
-        if not title or ts is None:
+    out, source = _filter_headlines(_yahoo_search_items(ticker), ticker, lookback_hours, now, market), "yahoo"
+    if not out and config.ML_V2_NEWS_GOOGLE_FALLBACK:
+        out, source = _filter_headlines(_google_news_items(ticker, lookback_hours, market),
+                                        ticker, lookback_hours, now, market), "google"
+    print(f"[news] {ticker}: {len(out)} fresh headline(s) ({source if out else 'none found'})")
+    return out
+
+
+def _filter_headlines(parsed: list, ticker: str, lookback_hours: float, now: datetime,
+                      market: bool) -> list:
+    out, seen = [], set()
+    for title, summary, ts in parsed:
+        if not title or ts is None or title in seen:
             continue
+        seen.add(title)
         age_h = (now - ts).total_seconds() / 3600.0
         if not (0 <= age_h <= lookback_hours):
             continue

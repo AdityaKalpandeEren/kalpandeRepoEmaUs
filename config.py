@@ -371,6 +371,10 @@ ML_V2_NEWS_BOOST = 0.35           # aligned score at/above this ...
 ML_V2_NEWS_BOOST_PROB = 0.03      # ... lowers the probability bar by this much
 ML_V2_NEWS_EXIT = 0.45            # open trade + fresh opposing news this strong = exit alert
 ML_V2_NEWS_CACHE_SECONDS = 600
+# Headlines come from Yahoo's search endpoint (yf.Search); Google News RSS
+# is the fallback when Yahoo has nothing fresh and relevant for a ticker.
+ML_V2_NEWS_FETCH_COUNT = 20
+ML_V2_NEWS_GOOGLE_FALLBACK = os.getenv("ML_V2_NEWS_GOOGLE_FALLBACK", "true").lower() == "true"
 # LLM scoring of headlines. On by default with Google Gemini's FREE tier
 # (key from aistudio.google.com, no billing) - set GEMINI_API_KEY. With no
 # key, or on any API error (incl. free-tier rate limits), it falls back to
