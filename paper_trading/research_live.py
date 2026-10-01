@@ -330,10 +330,11 @@ class ResearchPass:
         if self.state is None:
             return
         try:
-            if self.new_alerts:
-                send_text(_format_entries(self.new_alerts))
-            if self.closed_alerts:
-                send_text(_format_exits(self.closed_alerts))
+            entries, exits = _alertable(self.new_alerts), _alertable(self.closed_alerts)
+            if entries:
+                send_text(_format_entries(entries))
+            if exits:
+                send_text(_format_exits(exits))
             save_state(self.state)
         finally:
             if self._lock_cm is not None:
@@ -368,11 +369,19 @@ class ResearchPass:
                 _close_at_last_seen(t)
             elif t["status"] == "PENDING":
                 t["status"] = "NEVER_FILLED"
-        if self.closed_alerts:
-            send_text(_format_exits(self.closed_alerts))
-            self.closed_alerts = []
+        exits = _alertable(self.closed_alerts)
+        if exits:
+            send_text(_format_exits(exits))
+        self.closed_alerts = []
         send_eod_report(self.state)
         save_state(self.state)
+
+
+def _alertable(trades: list) -> list:
+    """Trades whose strategy isn't muted (config.LIVE_RESEARCH_SILENT_STRATEGIES).
+    Muted strategies are still paper-traded and in the EOD report."""
+    silent = set(config.LIVE_RESEARCH_SILENT_STRATEGIES)
+    return [t for t in trades if t["strategy"] not in silent]
 
 
 def _finalize(t: dict, exit_time, exit_price, outcome, candles_held):
