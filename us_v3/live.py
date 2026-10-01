@@ -13,8 +13,8 @@ Each trigger (cron-job.org, every 2 min) does whatever is due, idempotently:
   09:35-10:30 ET  refresh today's 5-min bars; find NEW opening-range
                   breakouts (first 5-min bar green -> long above its high,
                   red -> short below its low); score each with the model;
-                  paper-enter if score >= threshold, at most V3_MAX (20)
-                  per day at DAILY_RISK/V3_MAX (0.25%) risk each, one entry per symbol per day, at the LIVE price
+                  paper-enter if score >= threshold, at most V3_MAX (12)
+                  per day at DAILY_RISK/V3_MAX (~0.42%) risk each, one entry per symbol per day, at the LIVE price
                   (stop = 10% of daily ATR from that price)
   until 15:55 ET  stop checks on every closed 5-min bar since entry
   15:55-16:10 ET  close everything at the 15:55 bar close; Telegram day
@@ -40,9 +40,9 @@ from us_v3 import research as R
 ET = D.ET
 STATE_DIR = os.environ.get("US_V3_STATE_DIR", os.path.join("live_state", "us_v3"))
 MODEL_PATH = os.path.join(STATE_DIR, "model.joblib")
-V3_MAX = int(os.environ.get("V3_MAX_TRADES_PER_DAY", "20"))
+V3_MAX = int(os.environ.get("V3_MAX_TRADES_PER_DAY", "12"))
 # Total risk per day stays ~5% of equity however many trades are allowed:
-# 20 trades/day -> 0.25% risk each (research: 20/day at 1% each had a -56% drawdown).
+# 12 trades/day -> ~0.42% risk each (research: 20/day at 1% each had a -56% drawdown).
 DAILY_RISK = float(os.environ.get("V3_DAILY_RISK", "0.05"))
 RISK_PER_TRADE = DAILY_RISK / V3_MAX
 V3_DIRECTIONS = {d.strip() for d in os.environ.get("V3_DIRECTIONS", "long,short").split(",") if d.strip()}
