@@ -13,8 +13,8 @@ Each trigger (cron-job.org, every 2 min) does whatever is due, idempotently:
   09:35-10:30 ET  refresh today's 5-min bars; find NEW opening-range
                   breakouts (first 5-min bar green -> long above its high,
                   red -> short below its low); score each with the model;
-                  paper-enter if score >= threshold, at most config.V3_MAX
-                  per day, one entry per symbol per day, at the LIVE price
+                  paper-enter if score >= threshold, at most V3_MAX (20)
+                  per day at DAILY_RISK/V3_MAX (0.25%) risk each, one entry per symbol per day, at the LIVE price
                   (stop = 10% of daily ATR from that price)
   until 15:55 ET  stop checks on every closed 5-min bar since entry
   15:55-16:10 ET  close everything at the 15:55 bar close; Telegram day
@@ -40,7 +40,11 @@ from us_v3 import research as R
 ET = D.ET
 STATE_DIR = os.environ.get("US_V3_STATE_DIR", os.path.join("live_state", "us_v3"))
 MODEL_PATH = os.path.join(STATE_DIR, "model.joblib")
-V3_MAX = int(os.environ.get("V3_MAX_TRADES_PER_DAY", "5"))
+V3_MAX = int(os.environ.get("V3_MAX_TRADES_PER_DAY", "20"))
+# Total risk per day stays ~5% of equity however many trades are allowed:
+# 20 trades/day -> 0.25% risk each (research: 20/day at 1% each had a -56% drawdown).
+DAILY_RISK = float(os.environ.get("V3_DAILY_RISK", "0.05"))
+RISK_PER_TRADE = DAILY_RISK / V3_MAX
 V3_DIRECTIONS = {d.strip() for d in os.environ.get("V3_DIRECTIONS", "long,short").split(",") if d.strip()}
 SETUP = "ORB_ATR"            # the configuration selected in research (ML top-5, 10% ATR stop)
 RETRAIN_DAYS = 7
@@ -84,7 +88,7 @@ def train(syms: list[str]) -> dict:
     df = R.build(syms)                                   # every complete day in the growing store
     df["pred"] = R.walk_forward(df)                      # out-of-sample scores -> threshold calibration
     oos = df[(df["setup"] == SETUP) & df["pred"].notna()]
-    # threshold = typical 5th-best out-of-sample score of a day (so ~V3_MAX entries/day)
+    # threshold = typical V3_MAX-th best out-of-sample score of a day (so ~V3_MAX entries/day)
     kth = oos.groupby("date")["pred"].apply(lambda s: s.nlargest(V3_MAX).min() if len(s) >= V3_MAX else s.min())
     thr = float(max(np.nanmedian(kth), 0.0))
     m = lgb.LGBMRegressor(n_estimators=300, learning_rate=0.03, num_leaves=15, min_child_samples=40, subsample=0.8,
@@ -94,7 +98,7 @@ def train(syms: list[str]) -> dict:
     top = top[top["pred"] > 0]
     info = {"trained_at": datetime.now(ET).isoformat(timespec="minutes"), "days": int(df["date"].nunique()),
             "rows": int(len(df)), "threshold": thr, "oos_top_avgR": round(float(top["R"].mean()), 3) if len(top) else None,
-            "oos_days": int(oos["date"].nunique())}
+            "oos_days": int(oos["date"].nunique()), "max_per_day": V3_MAX}
     joblib.dump({"model": m, "features": R.FEATURES, "info": info}, MODEL_PATH)
     return info
 
@@ -240,8 +244,9 @@ def day_report(st, now, telegram):
         lines.append(f"{mark} {'LONG' if p['side'] > 0 else 'SHORT'} {p['symbol']}: {p['entry']:.2f} -> {p.get('exit', float('nan')):.2f} "
                      f"({p.get('outcome', '?')}) {p.get('R', 0):+.2f}R, {p.get('ret_pct', 0):+.2f}%")
     if ps:
-        lines.append(f"Day: {sum(p.get('R', 0) for p in ps):+.2f}R over {len(ps)} trades (1% risk/trade -> "
-                     f"{sum(p.get('R', 0) for p in ps):+.2f}% of equity)")
+        day_r = sum(p.get('R', 0) for p in ps)
+        lines.append(f"Day: {day_r:+.2f}R over {len(ps)} trades ({RISK_PER_TRADE * 100:.2f}% risk/trade -> "
+                     f"{day_r * RISK_PER_TRADE * 100:+.2f}% of equity)")
     f = _p("trades.csv")
     if os.path.exists(f):
         t = pd.read_csv(f)
@@ -273,7 +278,8 @@ def run(telegram: bool, force_retrain: bool = False) -> bool:
         D.refresh_daily(syms + D.CONTEXT)
         D.refresh_earnings(syms)
         m = load_model()
-        stale = m is None or (datetime.now(ET) - datetime.fromisoformat(m["info"]["trained_at"])).days >= RETRAIN_DAYS
+        stale = (m is None or (datetime.now(ET) - datetime.fromisoformat(m["info"]["trained_at"])).days >= RETRAIN_DAYS
+                 or m["info"].get("max_per_day") != V3_MAX)          # threshold depends on the daily limit
         if stale or force_retrain:
             info = train(syms)
             print(f"[US V3] retrained: {info}", flush=True)
@@ -292,6 +298,10 @@ def run(telegram: bool, force_retrain: bool = False) -> bool:
 
     D.refresh_intraday(syms + D.CONTEXT, period="1d")
     bundle = load_model()
+    if bundle is not None and bundle["info"].get("max_per_day") != V3_MAX:
+        info = train(syms)                                 # daily limit changed -> recalibrate now, not next week
+        notify(f"🧠 US V3 model recalibrated for up to {V3_MAX} trades/day; threshold {info['threshold']:+.2f}", telegram)
+        bundle, changed = load_model(), True
     if bundle is None:
         print("[US V3] no model yet")
         return changed
