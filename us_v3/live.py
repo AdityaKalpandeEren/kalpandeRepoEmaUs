@@ -35,6 +35,7 @@ import json
 import os
 import time
 from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -42,7 +43,7 @@ import pandas as pd
 from us_v3 import data as D
 from us_v3 import research as R
 
-ET = D.ET
+ET = ZoneInfo(D.ET)          # a tzinfo object - datetime.now() rejects the plain string
 STATE_DIR = os.environ.get("US_V3_STATE_DIR", os.path.join("live_state", "us_v3"))
 MODEL_PATH = os.path.join(STATE_DIR, "model.joblib")
 V3_MAX = int(os.environ.get("V3_MAX_TRADES_PER_DAY", "12"))
