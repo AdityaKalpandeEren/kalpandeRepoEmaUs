@@ -24,19 +24,21 @@ on:
     - cron: "*/5 0-1 * * 2-6"
   workflow_dispatch: {}   # manual runs + the cron-job.org trigger (every 2 min)
 
-# One scan at a time: the research paper-trading state (live_state/) is
-# read at the start of a run and written at the end, so two overlapping
-# runs would lose each other's trades. A trigger that arrives while a run
-# is in progress waits; the next run catches up on every candle closed
-# since the last one, so nothing is skipped.
-concurrency:
-  group: us-alert-scan
-  cancel-in-progress: false
+# Concurrency is set per JOB (not per workflow run) so the V3 job never
+# delays the scan.
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    # One scan at a time: the research paper-trading state (live_state/) is
+    # read at the start of a run and written at the end, so two overlapping
+    # runs would lose each other's trades. A trigger that arrives while a run
+    # is in progress waits; the next run catches up on every candle closed
+    # since the last one, so nothing is skipped.
+    concurrency:
+      group: us-alert-scan
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -102,3 +104,77 @@ jobs:
             live_state/paper_trades_all.csv
           if-no-files-found: ignore
           retention-days: 30
+
+  # US V3 (us_v3/live.py): Stocks-in-Play opening-range breakout + ML ranker,
+  # paper only, Telegram alerts. Same trigger as the scan; each run does one
+  # step: 09:00 ET prep (data refresh, weekly retrain), 09:35-10:30 breakout
+  # entries, stop checks until 15:55, day report after 16:00.
+  v3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: us-v3
+      cancel-in-progress: false
+    steps:
+      - name: Trading window check (Mon-Fri 09:00-16:15 ET)
+        id: win
+        run: |
+          hhmm=$(TZ=America/New_York date +%H%M); dow=$(TZ=America/New_York date +%u)
+          if [ "$dow" -le 5 ] && [ "$hhmm" -ge 0900 ] && [ "$hhmm" -le 1615 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "outside the US V3 window ($hhmm ET) - nothing to do"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.win.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.win.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - if: steps.win.outputs.run == 'true'
+        run: pip install -r requirements.txt -r us_v3/requirements-live.txt
+
+      # V3 state + model + its growing 5-min store (own key prefix; never
+      # mixes with the scan's live-state- cache)
+      - name: Restore US V3 state + data
+        if: steps.win.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            live_state/us_v3
+            backtest/ml/cache/v3us
+          key: us-v3-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            us-v3-
+
+      - name: Run US V3 step
+        id: v3
+        if: steps.win.outputs.run == 'true'
+        timeout-minutes: 22
+        run: python -m us_v3.live
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Save US V3 state + data
+        if: always() && steps.win.outputs.run == 'true' && steps.v3.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            live_state/us_v3
+            backtest/ml/cache/v3us
+          key: us-v3-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload US V3 trades
+        if: always() && steps.win.outputs.run == 'true' && steps.v3.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-v3-${{ github.run_id }}
+          path: live_state/us_v3
+          if-no-files-found: ignore
+          retention-days: 30
+
