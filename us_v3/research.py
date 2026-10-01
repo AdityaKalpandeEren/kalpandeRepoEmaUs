@@ -52,12 +52,25 @@ def _sessions(x: pd.DataFrame):
     return pre, rth, post
 
 
-def symbol_days(sym: str, ctx_ret: dict) -> pd.DataFrame:
-    """One row per trading day: opening facts + candidate trades."""
-    x = D.load(sym)
+def _closed(x: pd.DataFrame, now) -> pd.DataFrame:
+    """Live mode: keep only bars that have finished (ts + 5 min <= now)."""
+    if now is None or x.empty:
+        return x
+    return x[x.index + pd.Timedelta(minutes=5) <= now]
+
+
+def symbol_days(sym: str, ctx_ret: dict, now=None, last_days: int | None = None) -> pd.DataFrame:
+    """One row per trading day: opening facts + candidate trades.
+    now (live): use only closed bars and accept today's partial session."""
+    x = _closed(D.load(sym), now)
     dly = D.load(sym, "1d")
     if x.empty or dly.empty:
         return pd.DataFrame()
+    if last_days:
+        keep = sorted(set(x.index.date))[-last_days:]
+        x = x[pd.Index(x.index.date).isin(keep)]
+    if now is not None:
+        dly = dly[dly.index < pd.Timestamp(now.date())]          # today's daily bar is unfinished
     e = D.load(sym, "earn")
     earn_ts = pd.DatetimeIndex(e["ts"]) if len(e) else pd.DatetimeIndex([])
     tr = pd.concat([dly["high"] - dly["low"], (dly["high"] - dly["close"].shift()).abs(),
@@ -69,8 +82,9 @@ def symbol_days(sym: str, ctx_ret: dict) -> pd.DataFrame:
     prev_close, or_vols, pm_vols = None, [], []
     for day, g in x.groupby(x.index.date):
         pre, rth, post = _sessions(g)
-        if len(rth) < 70 or rth.index[0].time() != OPEN:
-            if len(rth):
+        live_today = now is not None and day == now.date()
+        if (len(rth) < 70 and not live_today) or not len(rth) or rth.index[0].time() != OPEN:
+            if len(rth) and not live_today:
                 prev_close = float(rth["close"].iloc[-1])
             continue
         orb = rth.iloc[0]
@@ -199,15 +213,15 @@ def _trade(setup, side, i, entry, stop, px, xts, outcome, f):
     return f
 
 
-def context() -> dict:
+def context(now=None) -> dict:
     """Per day: SPY/QQQ/SMH return since the open and VIX change at each bar."""
     out = {}
-    series = {k: D.load(s) for k, s in (("spy", "SPY"), ("qqq", "QQQ"), ("smh", "SMH"), ("vix", "^VIX"))}
+    series = {k: _closed(D.load(s), now) for k, s in (("spy", "SPY"), ("qqq", "QQQ"), ("smh", "SMH"), ("vix", "^VIX"))}
     spy = series["spy"]
     prev = None
     for day, g in spy.groupby(spy.index.date):
         _, rth, _ = _sessions(g)
-        if len(rth) < 70:
+        if len(rth) < 70 and not (now is not None and day == now.date() and len(rth)):
             continue
         d = {}
         for k, s in series.items():

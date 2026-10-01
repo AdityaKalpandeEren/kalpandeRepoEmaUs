@@ -1,0 +1,3 @@
+# Extra packages for the US V3 job only (the scan job doesn't need them).
+lightgbm==4.7.0
+pyarrow>=15
