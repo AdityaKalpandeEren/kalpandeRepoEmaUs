@@ -436,8 +436,13 @@ ML_V2_EXCLUDE_FEATURES = [
 LIVE_RESEARCH_ENABLED = os.getenv("LIVE_RESEARCH_ENABLED", "true").lower() == "true"
 LIVE_RESEARCH_STRATEGIES = [s.strip() for s in os.getenv(
     "LIVE_RESEARCH_STRATEGIES",
-    "K_RSI2_REVERSION,SCORE_ENGINE,L_ML_META,L_ML_META_V2,L_ML_META_V2_2,J_VWAP_BAND_REVERSION",
+    "K_RSI2_REVERSION,SCORE_ENGINE,L_ML_META,L_ML_META_V2,L_ML_META_V2_2,L_ML_META_V1_2,J_VWAP_BAND_REVERSION",
 ).split(",") if s.strip()]
+# Strategies still paper-traded and shown in the EOD report, but with no
+# Telegram entry/exit alerts. SCORE_ENGINE muted 2026-10-01 (monitor only);
+# remove it from this default to alert again.
+LIVE_RESEARCH_SILENT_STRATEGIES = [s.strip() for s in os.getenv(
+    "LIVE_RESEARCH_SILENT_STRATEGIES", "SCORE_ENGINE").split(",") if s.strip()]
 LIVE_RESEARCH_DIRECTIONS = [d.strip() for d in os.getenv(
     "LIVE_RESEARCH_DIRECTIONS", "long").split(",") if d.strip()]
 LIVE_RESEARCH_TELEGRAM = os.getenv("LIVE_RESEARCH_TELEGRAM", "true").lower() == "true"
