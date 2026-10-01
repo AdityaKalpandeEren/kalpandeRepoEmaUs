@@ -282,15 +282,35 @@ def stats(daily: pd.Series, trades: pd.DataFrame) -> dict:
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="US V3 walk-forward research")
+    ap.add_argument("--symbols", help="comma-separated tickers (default: watchlist.txt)")
+    ap.add_argument("--days", type=int, help="use only the last N trading days in the store")
+    ap.add_argument("--directions", default="long,short", help="long | short | long,short")
+    ap.add_argument("--refresh", action="store_true", help="download the latest 5-min data first")
+    ap.add_argument("--min-train-days", type=int, default=20)
+    a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     from backtest.run_backtest import load_symbol_list
-    syms = list(dict.fromkeys(D.tradable(load_symbol_list("watchlist.txt"))))
+    syms = [s.strip().upper() for s in a.symbols.split(",")] if a.symbols else load_symbol_list("watchlist.txt")
+    syms = list(dict.fromkeys(D.tradable(syms)))
+    if a.refresh:
+        D.refresh_intraday(syms + D.CONTEXT)
+        D.refresh_daily(syms + D.CONTEXT)
+        D.refresh_earnings(syms)
     df = build(syms)
+    if a.days:
+        keep = sorted(df["date"].unique())[-a.days:]
+        df = df[df["date"].isin(keep)]
+    dirs = {"long": 1, "short": -1}
+    df = df[df["side"].isin([dirs[d.strip()] for d in a.directions.split(",") if d.strip() in dirs])]
+    if df["date"].nunique() <= a.min_train_days:
+        raise SystemExit(f"need more than {a.min_train_days} days (have {df['date'].nunique()}): raise --days or lower --min-train-days")
     out_dir = os.path.join("backtest", "results", "us_v3")
     os.makedirs(out_dir, exist_ok=True)
     df.to_parquet(os.path.join(out_dir, "candidates.parquet"))
     log.info("candidates: %d trades, %d days, %d symbols", len(df), df["date"].nunique(), df["symbol"].nunique())
-    df["pred"] = walk_forward(df)
+    df["pred"] = walk_forward(df, min_train_days=a.min_train_days)
     test = df[df["pred"].notna()].copy()
     tdays = sorted(test["date"].unique())
     log.info("walk-forward test: %d days (%s .. %s)", len(tdays), tdays[0].date(), tdays[-1].date())
