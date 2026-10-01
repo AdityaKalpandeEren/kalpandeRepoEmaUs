@@ -868,6 +868,42 @@ def model_l_ml_meta_v2_2(symbol, df, direction, regime) -> Optional[StrategySign
     )
 
 
+def model_l_ml_meta_v1_2(symbol, df, direction, regime) -> Optional[StrategySignal]:
+    """L_ML_META_V1_2 - L_ML_META_V2 exactly as it ran live on 2026-09-28,
+    when the news fetch returned no headlines: same model file, threshold,
+    session gate, VIX vetoes, candidates and exits, but no news overlay at
+    all (no news veto, no news-lowered bar)."""
+    bundle = _load_ml_v2()
+    if bundle is None or not ml_v2_in_session(df):
+        return None
+    from strategy.market_context import get_context
+    ctx = get_context()
+    cands = ml_v2_candidates(symbol, df, direction, regime, ctx)
+    if not cands:
+        return None
+
+    cols = bundle["feature_columns"]
+    X = pd.DataFrame([f for _, _, f in cands], columns=cols)
+    try:
+        probs = bundle["model"].predict_proba(X)[:, 1]
+    except Exception:
+        return None
+    best = int(probs.argmax())
+    best_name, best_sig, _ = cands[best]
+    best_prob = float(probs[best])
+    threshold = ml_v2_threshold(bundle)
+
+    if best_prob < threshold:
+        return None
+    return replace(
+        best_sig,
+        strategy="L_ML_META_V1_2",
+        score=round(best_prob * 100, 1),
+        reason=f"meta-v1.2: {best_name} p={best_prob:.2f} (bar {threshold:.2f}) | no news",
+        exit_mode="v2",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════
 
 BASE_MODELS = {
@@ -886,7 +922,8 @@ BASE_MODELS = {
 }
 
 ENTRY_MODELS = {**BASE_MODELS, "L_ML_META": model_l_ml_meta,
-                "L_ML_META_V2": model_l_ml_meta_v2, "L_ML_META_V2_2": model_l_ml_meta_v2_2}
+                "L_ML_META_V2": model_l_ml_meta_v2, "L_ML_META_V2_2": model_l_ml_meta_v2_2,
+                "L_ML_META_V1_2": model_l_ml_meta_v1_2}
 
 
 def evaluate_all(symbol: str, df: pd.DataFrame, models: dict = None,
