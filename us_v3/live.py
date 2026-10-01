@@ -19,6 +19,11 @@ Each trigger (cron-job.org, every 2 min) does whatever is due, idempotently:
   until 15:55 ET  stop checks on every closed 5-min bar since entry
   15:55-16:10 ET  close everything at the 15:55 bar close; Telegram day
                   report + all-time stats (once)
+Guards: AUTO-THROTTLE - if the last 10 live trading days are net negative,
+only 5 trades/day are allowed until that rolling sum turns positive (Telegram
+says so). DRIFT ALERT - if the last 30 closed trades fall well short of the
+R the model predicted for them (t < -2), the day report warns that the market
+no longer matches what the model learned.
 Paper only - nothing is sent to a broker. Shorts are paper-only too
 (V3_DIRECTIONS=long for long-only).
 """
@@ -122,6 +127,56 @@ def _log(row: dict) -> None:
 
 MAX_CORR = float(os.environ.get("V3_MAX_CORR", "0.7"))
 
+# Auto-throttle: if the last THROTTLE_LOOKBACK traded days are net negative,
+# allow only THROTTLE_MAX trades/day until the rolling sum turns positive.
+THROTTLE_LOOKBACK = 10
+THROTTLE_MIN_DAYS = 5
+THROTTLE_MAX = 5
+# Drift alert: live results vs what the model expected for the same trades.
+DRIFT_LOOKBACK = 30          # most recent closed trades
+DRIFT_MIN_TRADES = 15
+DRIFT_T = -2.0               # t-stat of (realised R - predicted R) below this -> alert
+
+
+def live_trades() -> pd.DataFrame:
+    f = _p("trades.csv")
+    return pd.read_csv(f) if os.path.exists(f) else pd.DataFrame()
+
+
+def daily_cap() -> tuple[int, str]:
+    """Today's max trades and a one-line reason."""
+    t = live_trades()
+    if t.empty:
+        return V3_MAX, "normal (no live history yet)"
+    days = t.groupby("date")["R"].sum().sort_index().tail(THROTTLE_LOOKBACK)
+    if len(days) < THROTTLE_MIN_DAYS:
+        return V3_MAX, f"normal ({len(days)} live days, throttle needs {THROTTLE_MIN_DAYS})"
+    tot = float(days.sum())
+    if tot < 0:
+        return min(THROTTLE_MAX, V3_MAX), (f"THROTTLED to {min(THROTTLE_MAX, V3_MAX)}/day: last {len(days)} live days "
+                                           f"{tot:+.1f}R (resumes {V3_MAX}/day when that turns positive)")
+    return V3_MAX, f"normal: last {len(days)} live days {tot:+.1f}R"
+
+
+def drift_check() -> str | None:
+    """Alert text if recent live trades fall well short of the model's own
+    expectation (predicted R) - a sign the market no longer matches what the
+    model learned. None if fine or too few trades."""
+    t = live_trades()
+    if t.empty or "pred" not in t:
+        return None
+    t = t.dropna(subset=["R", "pred"]).tail(DRIFT_LOOKBACK)
+    if len(t) < DRIFT_MIN_TRADES:
+        return None
+    gap = t["R"] - t["pred"]
+    sd = gap.std(ddof=1)
+    tstat = gap.mean() / (sd / np.sqrt(len(gap))) if sd > 0 else 0.0
+    if tstat < DRIFT_T:
+        return (f"⚠️ US V3 DRIFT: last {len(t)} trades averaged {t['R'].mean():+.2f}R vs {t['pred'].mean():+.2f}R "
+                f"expected by the model (t {tstat:.1f}). The market may have changed since training - results are "
+                f"below what the model learned. Next retrain uses the new data; consider pausing if it persists.")
+    return None
+
 
 def _price_now(sym: str, now):
     """Latest traded price at `now` (the forming bar's last close), never later."""
@@ -173,7 +228,7 @@ def scan_breakouts(st, now, syms, bundle, telegram):
         X = pd.DataFrame([row[bundle["features"]].astype(float)])
         pred = float(bundle["model"].predict(X)[0])
         thr = bundle["info"]["threshold"]
-        if pred < thr or len(taken) >= V3_MAX:
+        if pred < thr or len(taken) >= st.get("cap", V3_MAX):
             continue
         twin = _too_correlated(sym, taken, now)
         if twin:
@@ -193,7 +248,7 @@ def scan_breakouts(st, now, syms, bundle, telegram):
                          f"(breakout {row['entry']:.2f}, RVOL {row['rvol_open']:.1f}x, gap {row['gap'] * 100:+.1f}%"
                          f"{', EARNINGS' if row['earnings_overnight'] else ''}, score {pred:+.2f})")
     if new_lines:
-        notify(f"🧠 US V3 PAPER (Stocks-in-Play ORB) {today.date()} - {len(taken)}/{V3_MAX} today\n"
+        notify(f"🧠 US V3 PAPER (Stocks-in-Play ORB) {today.date()} - {len(taken)}/{st.get('cap', V3_MAX)} today\n"
                + "\n".join(new_lines) + "\nExit: stop or 15:55 ET. Paper only.", telegram)
         return True
     return False
@@ -256,6 +311,13 @@ def day_report(st, now, telegram):
     m = load_model()
     if m:
         lines.append(f"Model: trained {m['info']['trained_at']} on {m['info']['days']} days; threshold {m['info']['threshold']:+.2f}")
+    lines.append(f"Daily limit today: {st.get('cap', V3_MAX)} ({st.get('cap_reason', 'normal')})")
+    nxt, why = daily_cap()
+    if nxt != st.get("cap", V3_MAX):
+        lines.append(("🐢 Tomorrow: " if nxt < V3_MAX else "✅ Tomorrow: back to ") + f"{nxt}/day - {why}")
+    drift = drift_check()
+    if drift:
+        lines.append(drift)
     notify("\n".join(lines), telegram)
 
 
@@ -305,6 +367,12 @@ def run(telegram: bool, force_retrain: bool = False) -> bool:
     if bundle is None:
         print("[US V3] no model yet")
         return changed
+    if "cap" not in st:
+        st["cap"], why = daily_cap()
+        st["cap_reason"] = why
+        changed = True
+        if st["cap"] < V3_MAX:
+            notify(f"🐢 US V3 auto-throttle: {why}", telegram)
     if mins <= 10 * 60 + 30:
         changed |= scan_breakouts(st, now, syms, bundle, telegram)
     changed |= check_exits(st, now, telegram)
