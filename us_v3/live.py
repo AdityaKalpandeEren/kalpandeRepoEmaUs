@@ -10,17 +10,28 @@ Each trigger (cron-job.org, every 2 min) does whatever is due, idempotently:
                   retrain the model if it is older than 7 days (weekly
                   learning on the growing 5-min store), recalibrate the
                   entry threshold from walk-forward predictions
-  09:35-10:30 ET  refresh today's 5-min bars; find NEW opening-range
-                  breakouts (first 5-min bar green -> long above its high,
-                  red -> short below its low); score each with the model;
-                  paper-enter if score >= threshold, at most V3_MAX (12)
-                  per day at DAILY_RISK/V3_MAX (~0.42%) risk each, one entry per symbol per day, at the LIVE price
-                  (stop = 10% of daily ATR from that price)
-  until 15:55 ET  stop checks on every closed 5-min bar since entry
+  09:35-10:40 ET  refresh today's 5-min bars; find NEW opening-range
+                  breakouts before 10:30 (first 5-min bar green -> long
+                  above its high, red -> short below its low) on SETTLED
+                  bars (closed >= SETTLE_MIN ago, so Yahoo's first print of a
+                  bar is not scored); only "stocks in play" (opening RVOL >=
+                  V3_MIN_RVOL, 1.0); score each with the model; enter if
+                  score >= threshold, at most V3_MAX (5) per day (earliest
+                  breakout first, then highest score) at DAILY_RISK/V3_MAX
+                  (1%) risk each, one entry per symbol per day.
+                  ENTRY = STOP-ENTRY AT THE BREAKOUT LEVEL (the open if the
+                  bar gapped through it), as in research: every feature is
+                  known at the START of the breakout bar, so the decision is
+                  what a resting stop order armed then would have done; the
+                  paper fill is booked at that level once the bar is seen.
+                  Stop = 10% of daily ATR from the fill.
+  until 15:55 ET  stop checks on every closed 5-min bar from the entry bar
+                  (on the entry bar only a CLOSE through the stop counts -
+                  its intrabar path is unknown - as in research)
   15:55-16:10 ET  close everything at the 15:55 bar close; Telegram day
                   report + all-time stats (once)
 Guards: AUTO-THROTTLE - if the last 10 live trading days are net negative,
-only 5 trades/day are allowed until that rolling sum turns positive (Telegram
+only THROTTLE_MAX (3) trades/day are allowed until that rolling sum turns positive (Telegram
 says so). DRIFT ALERT - if the last 30 closed trades fall well short of the
 R the model predicted for them (t < -2), the day report warns that the market
 no longer matches what the model learned.
@@ -34,7 +45,7 @@ import csv
 import json
 import os
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -46,13 +57,21 @@ from us_v3 import research as R
 ET = ZoneInfo(D.ET)          # a tzinfo object - datetime.now() rejects the plain string
 STATE_DIR = os.environ.get("US_V3_STATE_DIR", os.path.join("live_state", "us_v3"))
 MODEL_PATH = os.path.join(STATE_DIR, "model.joblib")
-V3_MAX = int(os.environ.get("V3_MAX_TRADES_PER_DAY", "12"))
+# 5/day: in us_v3/improve.py (61 days, DEV/HOLDOUT split) the top 5 carried the
+# edge (+0.68R / +0.48R per trade); at 12/day HOLDOUT fell to +0.04R.
+V3_MAX = int(os.environ.get("V3_MAX_TRADES_PER_DAY", "5"))
 # Total risk per day stays ~5% of equity however many trades are allowed:
-# 12 trades/day -> ~0.42% risk each (research: 20/day at 1% each had a -56% drawdown).
+# 5 trades/day -> 1% risk each (research: 20/day at 1% each had a -56% drawdown).
 DAILY_RISK = float(os.environ.get("V3_DAILY_RISK", "0.05"))
 RISK_PER_TRADE = DAILY_RISK / V3_MAX
 V3_DIRECTIONS = {d.strip() for d in os.environ.get("V3_DIRECTIONS", "long,short").split(",") if d.strip()}
 SETUP = "ORB_ATR"            # the configuration selected in research (ML top-5, 10% ATR stop)
+# "Stocks in play": opening-bar volume vs its 14-day average. Without it the
+# ML picks were ~2x weaker (improve.py: +0.24R vs +0.68R DEV at the level).
+MIN_RVOL = float(os.environ.get("V3_MIN_RVOL", "1.0"))
+SETTLE_MIN = 2               # score a bar only this long after it closed (Yahoo revises fresh bars)
+SCAN_END = 10 * 60 + 40      # breakouts must start by 10:30; +settle/trigger slack to see the last one
+MODEL_VERSION = 2            # 2 = trained on the traded setup only, threshold on RVOL-filtered scores
 RETRAIN_DAYS = 7
 
 
@@ -92,8 +111,9 @@ def train(syms: list[str]) -> dict:
     import joblib
     import lightgbm as lgb
     df = R.build(syms)                                   # every complete day in the growing store
+    df = df[df["setup"] == SETUP].reset_index(drop=True)  # learn the trade we take (as improve.py)
     df["pred"] = R.walk_forward(df)                      # out-of-sample scores -> threshold calibration
-    oos = df[(df["setup"] == SETUP) & df["pred"].notna()]
+    oos = df[df["pred"].notna() & (df["rvol_open"] >= MIN_RVOL)]   # only what live may trade
     # threshold = typical V3_MAX-th best out-of-sample score of a day (so ~V3_MAX entries/day)
     kth = oos.groupby("date")["pred"].apply(lambda s: s.nlargest(V3_MAX).min() if len(s) >= V3_MAX else s.min())
     thr = float(max(np.nanmedian(kth), 0.0))
@@ -104,7 +124,8 @@ def train(syms: list[str]) -> dict:
     top = top[top["pred"] > 0]
     info = {"trained_at": datetime.now(ET).isoformat(timespec="minutes"), "days": int(df["date"].nunique()),
             "rows": int(len(df)), "threshold": thr, "oos_top_avgR": round(float(top["R"].mean()), 3) if len(top) else None,
-            "oos_days": int(oos["date"].nunique()), "max_per_day": V3_MAX}
+            "oos_days": int(oos["date"].nunique()), "max_per_day": V3_MAX, "min_rvol": MIN_RVOL,
+            "version": MODEL_VERSION}
     joblib.dump({"model": m, "features": R.FEATURES, "info": info}, MODEL_PATH)
     return info
 
@@ -132,7 +153,7 @@ MAX_CORR = float(os.environ.get("V3_MAX_CORR", "0.7"))
 # allow only THROTTLE_MAX trades/day until the rolling sum turns positive.
 THROTTLE_LOOKBACK = 10
 THROTTLE_MIN_DAYS = 5
-THROTTLE_MAX = 5
+THROTTLE_MAX = 3
 # Drift alert: live results vs what the model expected for the same trades.
 DRIFT_LOOKBACK = 30          # most recent closed trades
 DRIFT_MIN_TRADES = 15
@@ -205,16 +226,25 @@ def _too_correlated(sym: str, held: list[str], now) -> str | None:
     return None
 
 
+def _model_matches_rules(bundle) -> bool:
+    """The model must match the live rules (version, daily limit, RVOL floor) -
+    its threshold was calibrated for them."""
+    i = bundle["info"]
+    return i.get("version") == MODEL_VERSION and i.get("max_per_day") == V3_MAX and i.get("min_rvol") == MIN_RVOL
+
+
 def scan_breakouts(st, now, syms, bundle, telegram):
-    ctx = R.context(now=now)
+    asof = now - timedelta(minutes=SETTLE_MIN)          # settled bars only
+    ctx = R.context(now=asof)
     today = pd.Timestamp(now.date())
-    new_lines = []
     taken = st.setdefault("taken", [])
     seen = st.setdefault("seen", [])
+    thr = bundle["info"]["threshold"]
+    found = []
     for sym in syms:
         if sym in seen:
             continue
-        t = R.symbol_days(sym, ctx, now=now, last_days=20)
+        t = R.symbol_days(sym, ctx, now=asof, last_days=20)
         if t.empty:
             continue
         t = t[(t["date"] == today) & (t["setup"] == SETUP)]
@@ -226,33 +256,44 @@ def scan_breakouts(st, now, syms, bundle, telegram):
         side = int(row["side"])
         if (side > 0 and "long" not in V3_DIRECTIONS) or (side < 0 and "short" not in V3_DIRECTIONS):
             continue
-        X = pd.DataFrame([row[bundle["features"]].astype(float)])
-        pred = float(bundle["model"].predict(X)[0])
-        thr = bundle["info"]["threshold"]
-        if pred < thr or len(taken) >= st.get("cap", V3_MAX):
+        if not float(row["rvol_open"]) >= MIN_RVOL:       # NaN (short history) fails too
+            continue
+        # every feature is as of the START of the breakout bar (prior bars,
+        # entry = the level), i.e. what an order armed then would have known
+        pred = float(bundle["model"].predict(pd.DataFrame([row[bundle["features"]].astype(float)]))[0])
+        if pred >= thr:
+            found.append((row, pred))
+
+    new_lines = []
+    for row, pred in sorted(found, key=lambda f: (f[0]["mins"], -f[1])):   # earliest breakout, then best score
+        sym, side = row["symbol"], int(row["side"])
+        if len(taken) >= st.get("cap", V3_MAX):
+            print(f"[US V3] skip {sym}: daily limit reached", flush=True)
             continue
         twin = _too_correlated(sym, taken, now)
         if twin:
             print(f"[US V3] skip {sym}: moves with {twin} (corr > {MAX_CORR})", flush=True)
             continue
-        px, pts = _price_now(sym, now)
-        if px is None:
-            continue
-        stop = px - side * 0.10 * float(row["atr_d"])
-        pos = {"symbol": sym, "side": side, "entry": px, "entry_ts": str(pts), "stop": round(stop, 4),
-               "level": float(row["entry"]), "pred": round(pred, 3), "rvol": round(float(row["rvol_open"]), 2),
-               "gap": round(float(row["gap"]), 4), "earnings": bool(row["earnings_overnight"]), "status": "OPEN"}
+        entry = float(row["entry"])                       # the level (or the open if it gapped through)
+        stop = entry - side * 0.10 * float(row["atr_d"])
+        bar_ts = pd.Timestamp.combine(now.date(), R.OPEN).tz_localize(D.ET) + pd.Timedelta(minutes=int(row["mins"]))
+        px_now, _ = _price_now(sym, now)
+        pos = {"symbol": sym, "side": side, "entry": entry, "entry_ts": str(bar_ts), "stop": round(stop, 4),
+               "level": float(row["or_high"] if side > 0 else row["or_low"]), "pred": round(pred, 3),
+               "rvol": round(float(row["rvol_open"]), 2), "gap": round(float(row["gap"]), 4),
+               "earnings": bool(row["earnings_overnight"]), "price_at_alert": px_now, "status": "OPEN",
+               "features": {f: float(row[f]) for f in bundle["features"]}}   # for replay / audits
         taken.append(sym)
         st.setdefault("positions", []).append(pos)
         word = "BUY" if side > 0 else "SHORT"
-        new_lines.append(f"{'🚀' if side > 0 else '🔻'} {word} {sym} @ {px:.2f}  stop {stop:.2f}  "
-                         f"(breakout {row['entry']:.2f}, RVOL {row['rvol_open']:.1f}x, gap {row['gap'] * 100:+.1f}%"
+        now_txt = f", now {px_now:.2f}" if px_now else ""
+        new_lines.append(f"{'🚀' if side > 0 else '🔻'} {word} {sym} stop-entry filled @ {entry:.2f} ({bar_ts:%H:%M} bar{now_txt})  "
+                         f"stop {stop:.2f}  (RVOL {row['rvol_open']:.1f}x, gap {row['gap'] * 100:+.1f}%"
                          f"{', EARNINGS' if row['earnings_overnight'] else ''}, score {pred:+.2f})")
     if new_lines:
         notify(f"🧠 US V3 PAPER (Stocks-in-Play ORB) {today.date()} - {len(taken)}/{st.get('cap', V3_MAX)} today\n"
                + "\n".join(new_lines) + "\nExit: stop or 15:55 ET. Paper only.", telegram)
-        return True
-    return False
+    return bool(new_lines)
 
 
 def check_exits(st, now, telegram, force_close=False) -> bool:
@@ -261,12 +302,18 @@ def check_exits(st, now, telegram, force_close=False) -> bool:
         if p["status"] != "OPEN":
             continue
         x = R._closed(D.load(p["symbol"]), now)
-        after = x[x.index > pd.Timestamp(p["entry_ts"])]
+        entry_ts = pd.Timestamp(p["entry_ts"])
+        after = x[x.index >= entry_ts]
         after = after[after.index.time < dtime(16, 0)]
         side, stop = p["side"], p["stop"]
         exit_px = None
         for ts, b in after.iterrows():
-            if (side > 0 and b.low <= stop) or (side < 0 and b.high >= stop):
+            if ts == entry_ts:                           # entry bar: only a close through the stop counts
+                if (side > 0 and b.close <= stop) or (side < 0 and b.close >= stop):
+                    exit_px = stop
+                    p.update(status="CLOSED", exit=exit_px, exit_ts=str(ts), outcome="STOP")
+                    break
+            elif (side > 0 and b.low <= stop) or (side < 0 and b.high >= stop):
                 exit_px = min(stop, b.open) if side > 0 else max(stop, b.open)
                 p.update(status="CLOSED", exit=exit_px, exit_ts=str(ts), outcome="STOP")
                 break
@@ -342,7 +389,7 @@ def run(telegram: bool, force_retrain: bool = False) -> bool:
         D.refresh_earnings(syms)
         m = load_model()
         stale = (m is None or (datetime.now(ET) - datetime.fromisoformat(m["info"]["trained_at"])).days >= RETRAIN_DAYS
-                 or m["info"].get("max_per_day") != V3_MAX)          # threshold depends on the daily limit
+                 or not _model_matches_rules(m))                                  # threshold depends on the live rules
         if stale or force_retrain:
             info = train(syms)
             print(f"[US V3] retrained: {info}", flush=True)
@@ -361,8 +408,8 @@ def run(telegram: bool, force_retrain: bool = False) -> bool:
 
     D.refresh_intraday(syms + D.CONTEXT, period="1d")
     bundle = load_model()
-    if bundle is not None and bundle["info"].get("max_per_day") != V3_MAX:
-        info = train(syms)                                 # daily limit changed -> recalibrate now, not next week
+    if bundle is not None and not _model_matches_rules(bundle):
+        info = train(syms)                                 # live rules changed -> recalibrate now, not next week
         notify(f"🧠 US V3 model recalibrated for up to {V3_MAX} trades/day; threshold {info['threshold']:+.2f}", telegram)
         bundle, changed = load_model(), True
     if bundle is None:
@@ -374,7 +421,7 @@ def run(telegram: bool, force_retrain: bool = False) -> bool:
         changed = True
         if st["cap"] < V3_MAX:
             notify(f"🐢 US V3 auto-throttle: {why}", telegram)
-    if mins <= 10 * 60 + 30:
+    if mins <= SCAN_END:
         changed |= scan_breakouts(st, now, syms, bundle, telegram)
     changed |= check_exits(st, now, telegram)
     if mins >= 16 * 60:                                   # the 15:55 bar has closed

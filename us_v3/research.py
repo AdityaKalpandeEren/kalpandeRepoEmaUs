@@ -59,6 +59,12 @@ def _closed(x: pd.DataFrame, now) -> pd.DataFrame:
     return x[x.index + pd.Timedelta(minutes=5) <= now]
 
 
+def _before(s: pd.Series, day: pd.Timestamp) -> float:
+    """Value on the last bar strictly before `day` (NaN if none)."""
+    s = s[s.index < day]
+    return float(s.iloc[-1]) if len(s) else np.nan
+
+
 def symbol_days(sym: str, ctx_ret: dict, now=None, last_days: int | None = None) -> pd.DataFrame:
     """One row per trading day: opening facts + candidate trades.
     now (live): use only closed bars and accept today's partial session."""
@@ -75,9 +81,13 @@ def symbol_days(sym: str, ctx_ret: dict, now=None, last_days: int | None = None)
     earn_ts = pd.DatetimeIndex(e["ts"]) if len(e) else pd.DatetimeIndex([])
     tr = pd.concat([dly["high"] - dly["low"], (dly["high"] - dly["close"].shift()).abs(),
                     (dly["low"] - dly["close"].shift()).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(14).mean().shift(1)                      # known before the session
-    hi20 = dly["high"].rolling(20).max().shift(1)
-    dret = dly["close"].pct_change().shift(1)
+    # Daily facts known before the session = the value on the last daily bar
+    # BEFORE the day (_before). Not shift(1)+asof: live drops today's
+    # unfinished bar, and the shift then lagged live one extra day (stale
+    # ATR / 20-day high / prior return vs training - fixed 2026-10-05).
+    atr = tr.rolling(14).mean()
+    hi20 = dly["high"].rolling(20).max()
+    dret = dly["close"].pct_change()
     rows = []
     prev_close, or_vols, pm_vols = None, [], []
     for day, g in x.groupby(x.index.date):
@@ -96,13 +106,13 @@ def symbol_days(sym: str, ctx_ret: dict, now=None, last_days: int | None = None)
         r["gap"] = orb.open / prev_close - 1 if prev_close else np.nan
         r["pm_ret"] = float(pre["close"].iloc[-1]) / prev_close - 1 if prev_close and len(pre) else np.nan
         r["pm_range"] = (pre["high"].max() / pre["low"].min() - 1) if len(pre) else np.nan
-        a = atr.asof(dkey) if len(atr) else np.nan
+        a = _before(atr, dkey)
         r["atr_d"] = a
         r["atr_pct"] = a / orb.open if a == a else np.nan
         r["or_ret"] = orb.close / orb.open - 1
         r["or_range_atr"] = (orb.high - orb.low) / a if a and a == a else np.nan
-        r["prev_ret"] = dret.asof(dkey) if len(dret) else np.nan
-        r["dist_hi20"] = orb.open / hi20.asof(dkey) - 1 if len(hi20) else np.nan
+        r["prev_ret"] = _before(dret, dkey)
+        r["dist_hi20"] = orb.open / _before(hi20, dkey) - 1
         prev_close_ts = pd.Timestamp.combine(day, CLOSE).tz_localize(D.ET) - pd.Timedelta(days=1)
         today_open_ts = pd.Timestamp.combine(day, OPEN).tz_localize(D.ET)
         r["earnings_overnight"] = float(((earn_ts > prev_close_ts - pd.Timedelta(days=3)) & (earn_ts <= today_open_ts)).any()) if len(earn_ts) else 0.0
