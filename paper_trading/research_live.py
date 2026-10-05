@@ -535,6 +535,13 @@ def build_eod_report(state: dict, include_all_time: bool = True):
             days = len({str(t.entry_time)[:10] for t in all_trades})
             text += "\n\n" + _summary_text(f"📚 ALL PAPER TRADING TO DATE ({days} days)",
                                             summarize(all_trades))
+    try:
+        from strategy.news_catalyst import decisions_summary
+        news = decisions_summary(state["date"])
+        if news:
+            text += "\n\n" + news
+    except Exception as e:
+        print(f"[research-live] news summary failed: {e!r}")
     text += ("\n\nSame fills, exits and costs as the backtest. Small daily samples are noise - "
              "judge strategies on the all-time block.")
     return text, res["report"]

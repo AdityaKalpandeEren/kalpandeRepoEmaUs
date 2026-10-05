@@ -644,3 +644,83 @@ def exit_check(symbol: str, direction: str):
     if sign * mkt.score <= -config.ML_V2_NEWS_EXIT:
         return f"bad market catalyst: {mkt.summary}"
     return None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Decision log: every live news check V2 / V2_2 make (veto, boost, plain
+# trade or skip) with the scores and the headline behind them - vetoed
+# candidates otherwise leave no trace, so whether news ever protects a
+# trade could not be measured. live_state/reports/ is uploaded with the
+# day's paper-trading artifact.
+# ═══════════════════════════════════════════════════════════════════
+DECISION_FIELDS = ["logged_at", "candle", "model", "symbol", "direction", "setup", "prob", "base_bar",
+                   "final_bar", "decision", "veto_reason", "news", "news_method", "news_items", "news_headline",
+                   "mkt", "mkt_method", "mkt_items", "mkt_headline"]
+
+
+def _decisions_path() -> str:
+    d = os.path.join(config.LIVE_STATE_DIR, "reports")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "news_decisions.csv")
+
+
+def log_decision(model: str, symbol: str, direction: str, candle, setup: str, prob: float,
+                 base_bar: float, veto, adj: float, sym: CatalystRead, mkt: CatalystRead) -> str:
+    """Record one news-checked candidate; returns the decision label:
+    VETO | SKIP (below the bar even after news) | TRADE_BOOSTED (only
+    trades because aligned news lowered the bar) | TRADE."""
+    final_bar = base_bar + adj
+    if veto:
+        decision = "VETO"
+    elif prob < final_bar:
+        decision = "SKIP"
+    elif prob < base_bar:
+        decision = "TRADE_BOOSTED"
+    else:
+        decision = "TRADE"
+    print(f"[news-decision] {model} {symbol} {direction} {setup} p={prob:.2f} bar {base_bar:.2f}->{final_bar:.2f} "
+          f"news {sym.score:+.2f} ({sym.method}, {sym.n_items}) mkt {mkt.score:+.2f} ({mkt.method}) -> {decision}"
+          + (f": {veto}" if veto else ""), flush=True)
+    row = {"logged_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "candle": str(candle),
+           "model": model, "symbol": symbol, "direction": direction, "setup": setup, "prob": round(prob, 4),
+           "base_bar": round(base_bar, 4), "final_bar": round(final_bar, 4), "decision": decision,
+           "veto_reason": veto or "", "news": sym.score, "news_method": sym.method, "news_items": sym.n_items,
+           "news_headline": sym.top_headline[:200], "mkt": mkt.score, "mkt_method": mkt.method,
+           "mkt_items": mkt.n_items, "mkt_headline": mkt.top_headline[:200]}
+    try:
+        import csv
+        path = _decisions_path()
+        new = not os.path.exists(path)
+        with open(path, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=DECISION_FIELDS)
+            if new:
+                w.writeheader()
+            w.writerow(row)
+    except Exception as e:
+        print(f"[news] could not log decision: {e!r}")
+    return decision
+
+
+def decisions_summary(day: str) -> str:
+    """EOD report block: per model, how news changed today's candidates."""
+    path = _decisions_path()
+    if not os.path.exists(path):
+        return ""
+    try:
+        import pandas as pd
+        d = pd.read_csv(path)
+    except Exception:
+        return ""
+    d = d[d["candle"].astype(str).str[:10] == day]
+    if d.empty:
+        return ""
+    lines = ["📰 NEWS DECISIONS today (candidates near the bar):"]
+    for model, g in d.groupby("model"):
+        c = g["decision"].value_counts()
+        llm = (g["news_method"].astype(str).str.startswith("llm")).mean() * 100 if model == "L_ML_META_V2" else None
+        lines.append(f"{model}: {len(g)} checked | TRADE {c.get('TRADE', 0)} | BOOSTED {c.get('TRADE_BOOSTED', 0)} | "
+                     f"VETO {c.get('VETO', 0)} | SKIP {c.get('SKIP', 0)}"
+                     + (f" | LLM-scored {llm:.0f}%" if llm is not None else ""))
+        for _, v in g[g["decision"] == "VETO"].head(5).iterrows():
+            lines.append(f"   veto {v['symbol']} p={v['prob']:.2f}: {str(v['veto_reason'])[:120]}")
+    return "\n".join(lines)

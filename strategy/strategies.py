@@ -805,6 +805,8 @@ def model_l_ml_meta_v2(symbol, df, direction, regime) -> Optional[StrategySignal
     if ctx.live and config.ML_V2_NEWS_ENABLED and best_prob >= threshold - config.ML_V2_NEWS_BOOST_PROB:
         from strategy import news_catalyst
         veto, adj, sym_read, mkt_read = news_catalyst.entry_decision(symbol, direction)
+        news_catalyst.log_decision("L_ML_META_V2", symbol, direction, df.iloc[-1]["timestamp"], best_name,
+                                   best_prob, threshold, veto, adj, sym_read, mkt_read)
         if veto:
             return None
         threshold += adj
@@ -852,6 +854,8 @@ def model_l_ml_meta_v2_2(symbol, df, direction, regime) -> Optional[StrategySign
     if ctx.live and config.ML_V2_NEWS_ENABLED and best_prob >= threshold - config.ML_V2_NEWS_BOOST_PROB:
         from strategy import news_catalyst
         veto, adj, sym_read, mkt_read = news_catalyst.entry_decision(symbol, direction, use_llm=False)
+        news_catalyst.log_decision("L_ML_META_V2_2", symbol, direction, df.iloc[-1]["timestamp"], best_name,
+                                   best_prob, threshold, veto, adj, sym_read, mkt_read)
         if veto:
             return None
         threshold += adj
