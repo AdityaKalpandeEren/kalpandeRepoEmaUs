@@ -178,3 +178,111 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+
+  # US V5.0 swing model (us_v5/live.py): once per trading day, on the first
+  # trigger after 09:35 ET - refreshes Yahoo daily bars to yesterday's close,
+  # scores the top-100 S&P 500 universe, and every 5th session rebalances the
+  # $100k paper portfolio (top 20) at today's open. Telegram: rebalance
+  # orders or a daily portfolio update vs SPY. Later triggers the same day
+  # exit at once (done-marker cache).
+  v5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: us-v5
+      cancel-in-progress: false
+    steps:
+      - name: Trading window check (Mon-Fri 09:35-16:00 ET)
+        id: win
+        run: |
+          hhmm=$(TZ=America/New_York date +%H%M); dow=$(TZ=America/New_York date +%u)
+          if [ "$dow" -le 5 ] && [ "$hhmm" -ge 0935 ] && [ "$hhmm" -le 1600 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "outside the US V5 window ($hhmm ET) - nothing to do"
+          fi
+
+      - name: Already done today?
+        if: steps.win.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .us_v5_done
+          key: us-v5-done-${{ github.run_id }}
+          restore-keys: |
+            us-v5-done-
+
+      - name: Check marker date
+        id: today
+        if: steps.win.outputs.run == 'true'
+        run: |
+          d=$(TZ=America/New_York date +%F)
+          if [ -f .us_v5_done ] && [ "$(cat .us_v5_done)" = "$d" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "US V5 already ran today ($d)"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.win.outputs.run == 'true' && steps.today.outputs.skip != 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.win.outputs.run == 'true' && steps.today.outputs.skip != 'true'
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - if: steps.win.outputs.run == 'true' && steps.today.outputs.skip != 'true'
+        run: pip install -r requirements.txt -r us_v5/requirements-live.txt
+
+      - name: Restore US V5 state + daily bars
+        if: steps.win.outputs.run == 'true' && steps.today.outputs.skip != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            live_state/us_v5
+            us_v5/cache
+          key: us-v5-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            us-v5-
+
+      - name: Run US V5 step
+        id: v5
+        if: steps.win.outputs.run == 'true' && steps.today.outputs.skip != 'true'
+        timeout-minutes: 25
+        run: python -m us_v5.live
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Save US V5 state + daily bars
+        if: always() && steps.win.outputs.run == 'true' && steps.v5.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            live_state/us_v5
+            us_v5/cache
+          key: us-v5-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Mark today done
+        if: steps.win.outputs.run == 'true' && steps.today.outputs.skip != 'true' && steps.v5.outcome == 'success' && hashFiles('live_state/us_v5/state.json') != ''
+        run: |
+          d=$(TZ=America/New_York date +%F)
+          if python -c "import json,sys; sys.exit(0 if json.load(open('live_state/us_v5/state.json')).get('last_day')=='$d' else 1)"; then
+            echo "$d" > .us_v5_done; echo "marked $d"
+          fi
+
+      - name: Save done marker
+        if: steps.win.outputs.run == 'true' && steps.today.outputs.skip != 'true' && hashFiles('.us_v5_done') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .us_v5_done
+          key: us-v5-done-${{ github.run_id }}
+
+      - name: Upload US V5 trades
+        if: always() && steps.win.outputs.run == 'true' && steps.v5.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-v5-${{ github.run_id }}
+          path: live_state/us_v5
+          if-no-files-found: ignore
+          retention-days: 30
