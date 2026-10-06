@@ -8,13 +8,17 @@ WATCH  (the dynamic list): today's change vs the previous close >= WATCH_PCT,
 SESSION regular hours only (09:35-15:30 entries): Yahoo reports no pre-market
        volume, so a pre-market run can't be volume-confirmed; pre-market PRICE
        moves still count (today's % change, the opening gap).
-SETUP  "ride the wave": bar t closes at a new high of day (above every
-       earlier high today, pre-market included), its volume >= VOL_SURGE x
-       the median of the previous 12 bars, and it closes above VWAP.
+SETUP  pullback continuation ("first pullback" of the small-cap momentum
+       playbook): the stock made its high of day within the last PB_LOOKBACK
+       bars, then pulled back >= PB_MIN_PCT on LIGHTER volume than the
+       high-of-day bar, and bar t now closes above the previous bar's high
+       (the reclaim), above VWAP and within 3% of the high of day.
+       (Chosen 2026-10-06 over the plain high-of-day breakout: it lost the
+       least in BOTH halves of a 48-variant test - about -0.43% vs -1.1% /
+       -0.3% per trade - but no small-cap setup was positive in both halves.)
 ENTRY  the NEXT bar's open + slippage (an alert needs time to reach a human).
-STOP   fixed STOP_PCT (8%) below the entry - tight next to +-50% swings, but
-       outside 5-min noise (bar-low and 5% stops were stopped out ~70% of the
-       time in the backtest). A bar that OPENS below the stop (gap / trading
+STOP   structural: below the pullback low, never more than STOP_PCT (8%) below
+       the entry (and at least 0.5% below it). A bar that OPENS below the stop (gap / trading
        halt) exits at that open - small caps can skip straight through a stop.
 WINDOW entries 09:35-15:30 ET (whole regular session - some runners only start in
        the afternoon; user, 2026-10-06), at most 15 a day (live cap).
@@ -37,6 +41,8 @@ VOL_SURGE = 2.0
 STOP_PCT = 0.08            # fixed stop below the entry (backtest: bar-low / 5% stops got shaken out by 5-min noise)
 MAX_STOP_PCT = STOP_PCT
 MAX_HOLD_MIN = 180
+PB_LOOKBACK = 6            # bars back to look for the high of day
+PB_MIN_PCT = 0.02          # pullback depth from the high of day
 SLIP_REGULAR = 0.0025
 SLIP_PRE = 0.005
 PRE_START, REG_START, LAST_ENTRY, FLAT = dtime(7, 0), dtime(9, 35), dtime(15, 30), dtime(15, 55)   # entries: whole regular session
@@ -98,9 +104,38 @@ def setups(x: pd.DataFrame, f: pd.DataFrame, sessions=("regular",)) -> pd.Index:
     in_pre = (t >= PRE_START) & (t < dtime(9, 25))
     in_reg = (t >= REG_START) & (t <= LAST_ENTRY)
     ok_time = (in_pre & ("pre" in sessions)) | (in_reg & ("regular" in sessions))
-    m = (ok_time & (f["pct"] >= WATCH_PCT) & (f["cum_dollar"] >= MIN_DOLLAR_VOL) & (x["close"] >= MIN_PRICE)
-         & f["new_hod"] & (f["vol_ratio"] >= VOL_SURGE) & (f["dist_vwap"] > 0))
-    return x.index[m.fillna(False).values]
+    watch = (ok_time & (f["pct"] >= WATCH_PCT) & (f["cum_dollar"] >= MIN_DOLLAR_VOL)
+             & (x["close"] >= MIN_PRICE) & (f["dist_vwap"] > 0)).fillna(False).values
+    c, h, lo, v = (x[k].to_numpy(float) for k in ("close", "high", "low", "volume"))
+    keep = []
+    for i in range(2, len(x)):
+        if watch[i] and pullback_low(h, lo, v, c, i) is not None:
+            keep.append(i)
+    return x.index[keep]
+
+
+def pullback_low(h, lo, v, c, i):
+    """Pullback low if bar i is a pullback-continuation reclaim (else None)."""
+    j0 = max(0, i - PB_LOOKBACK)
+    if i - j0 < 2:
+        return None
+    k = j0 + int(np.argmax(h[j0:i]))
+    hod = h[:i].max()
+    if h[k] < hod * 0.999 or k >= i - 1:            # the high of day must be recent, with >= 1 pullback bar after it
+        return None
+    pl = lo[k + 1:i].min()
+    lighter = v[k + 1:i].mean() < v[k]
+    if pl <= hod * (1 - PB_MIN_PCT) and lighter and c[i] > h[i - 1] and c[i] >= hod * 0.97:
+        return float(pl)
+    return None
+
+
+def initial_stop(x: pd.DataFrame, i: int, entry: float) -> float:
+    """Structural stop for the signal at bar i: the pullback low, capped at STOP_PCT."""
+    c, h, lo, v = (x[k].to_numpy(float) for k in ("close", "high", "low", "volume"))
+    pl = pullback_low(h, lo, v, c, i)
+    pl = entry * (1 - STOP_PCT) if pl is None else pl
+    return max(min(pl, entry * 0.995), entry * (1 - STOP_PCT))
 
 
 def simulate(sym, x: pd.DataFrame, sig_ts: pd.Timestamp, final: bool = True) -> Trade | None:
@@ -115,7 +150,7 @@ def simulate(sym, x: pd.DataFrame, sig_ts: pd.Timestamp, final: bool = True) -> 
     if ets.time() >= FLAT:
         return None
     entry = float(eb["open"]) * (1 + slip(ets))
-    stop = entry * (1 - STOP_PCT)
+    stop = initial_stop(x, i, entry)
     risk = entry - stop
     tr = Trade(sym, ets.date(), sig_ts, ets, entry, stop, session="pre" if ets.time() < dtime(9, 30) else "regular")
     best = entry
