@@ -30,6 +30,9 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write      # prune old caches (step below)
     timeout-minutes: 12
     # One scan at a time: the research paper-trading state (live_state/) is
     # read at the start of a run and written at the end, so two overlapping
@@ -85,6 +88,21 @@ jobs:
             live_state
             backtest/ml/cache
           key: live-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Each run saves a new live-state-<run_id> cache (~2 MB) and only the newest
+      # is ever restored. ~5,000 stale copies pushed the repo past GitHub's
+      # 10 GB cache limit (2026-10-06), so GitHub was evicting caches - which
+      # can include the model / data-store caches of the other jobs. Keep the
+      # newest 30; delete at most 40 per run (the backlog clears in a few hours).
+      - name: Prune old paper-trading caches
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key live-state- --sort created_at --order desc --limit 300 \
+            --json id,key --jq '.[] | select(.key | startswith("live-state-")) | .id' \
+            | tail -n +31 | head -n 40 | xargs -r -n1 gh cache delete --repo "$GITHUB_REPOSITORY" || true
 
       # Downloadable copy of the day's report + the all-time trade log
       # (Actions run page -> Artifacts) - only on after-close runs, not
