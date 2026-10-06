@@ -12,9 +12,12 @@ Each run (every ~2 min, 07:00-16:10 ET):
      still up < 10% - "suspicious volume before the move" - one alert per
      name per day (watch only, no trade).
   3. 5-minute bars (pre-market included) for the list; every NEW setup on a
-     closed bar (us_scr/strategy.py: new high of day on >= 2x volume above
-     VWAP, 09:35-15:30 ET) -> paper BUY at the next bar's open, fixed 8%
-     stop, trail under bar lows after +1R. At most V_MAX trades a day, one
+     closed bar (us_scr/strategy.py: pullback continuation - recent high of
+     day, >= 2% pullback on lighter volume, reclaim above the previous bar's
+     high, above VWAP; 09:35-15:30 ET) -> paper BUY at the next bar's open,
+     stop under the pullback low (max 8%), trail under bar lows after +1R.
+     Every alert is tagged with the small-cap "5 pillars" (RVOL >= 5x,
+     >= 1M shares, $1-20, up >= 10%, shares out <= 20M as a float proxy). At most V_MAX trades a day, one
      position per stock. The ML score is shown and logged, NOT used as a
      filter (it did not beat the plain rule out of sample, 2026-10-06).
   4. Exits are re-simulated each run with the SAME function as research
@@ -43,6 +46,7 @@ MODEL = os.path.join(D.ROOT, "us_scr", "model", "scr_model.joblib")
 V_MAX = int(os.environ.get("SCR_MAX_TRADES_PER_DAY", "15"))   # user, 2026-10-06 (tried 5, 10, 23)
 MAX_WATCH = 80
 VOL_WATCH_RVOL = 5.0
+VOL_WATCH_MIN_SHARES = 1_000_000  # "abnormal volume in the millions"
 EQUITY = 100_000.0
 RISK_PER_TRADE = 0.005            # 0.5% of paper equity at risk per trade (tight stops -> small size)
 START_MIN, END_MIN = 7 * 60, 16 * 60 + 10
@@ -118,7 +122,8 @@ def volume_watch(st: dict, telegram: bool) -> None:
             continue                                               # no OTC, funds or names without a market cap
         avg = x.get("averageDailyVolume10Day") or 0
         vol, pct = x.get("regularMarketVolume") or 0, x.get("regularMarketChangePercent") or 0
-        if avg and vol / avg >= VOL_WATCH_RVOL and -3 <= pct < S.WATCH_PCT * 100 and x["symbol"] not in sent:
+        if (avg and vol / avg >= VOL_WATCH_RVOL and vol >= VOL_WATCH_MIN_SHARES and -3 <= pct < S.WATCH_PCT * 100
+                and x["symbol"] not in sent):
             sent.add(x["symbol"])
             lines.append(f"📡 {x['symbol']} {pct:+.1f}% @ ${x.get('regularMarketPrice', 0):.2f} | volume {vol / avg:.1f}x 10-day avg "
                          f"| mcap {_fmt_money(x.get('marketCap'))}")
@@ -185,15 +190,15 @@ def run(telegram: bool) -> bool:
             st["taken"] += 1
             changed = True
             row, meta = f.loc[ts], (watch.set_index("symbol").loc[sym] if sym in set(watch["symbol"]) else {})
-            stop_hint = float(x.loc[ts, "close"]) * (1 - S.STOP_PCT)
+            stop_hint = S.initial_stop(x, x.index.get_loc(ts), float(x.loc[ts, "close"]))
             p = {"symbol": sym, "status": "PENDING", "signal_ts": str(ts), "score": round(float(score), 3),
                  "pct": round(float(row["pct"]) * 100, 1), "rvol": round(float(row["rvol"]), 1) if row["rvol"] == row["rvol"] else None,
                  "mcap": meta.get("mcap") if hasattr(meta, "get") else None}
             st["positions"].append(p)
             notify(f"{HEADER}\n🚀 BUY {sym} ~${float(x.loc[ts, 'close']):.2f} (next 5-min bar open)\n"
-                   f"⚡ {p['pct']:+.1f}% today | volume {p['rvol']}x avg | new high of day on {float(row['vol_ratio']):.1f}x bar volume | "
-                   f"mcap {_fmt_money(p['mcap'])}\n"
-                   f"🛑 stop ~${stop_hint:.2f} ({(stop_hint / float(x.loc[ts, 'close']) - 1) * 100:+.1f}%) | trail under bar lows after +1R | "
+                   f"⚡ {p['pct']:+.1f}% today | volume {p['rvol']}x avg | pullback reclaim near the high of day | "
+                   f"mcap {_fmt_money(p['mcap'])}\n{pillars(row, float(x.loc[ts, 'close']), c)}\n"
+                   f"🛑 stop ~${stop_hint:.2f} ({(stop_hint / float(x.loc[ts, 'close']) - 1) * 100:+.1f}%, under the pullback low) | trail under bar lows after +1R | "
                    f"max {S.MAX_HOLD_MIN} min, flat 15:55 ET\n🧠 ML score {score:+.2f} (experimental, not a filter) | trade {st['taken']}/{V_MAX} today\n"
                    f"🧪 UNPROVEN strategy - backtest ~0% before costs; forward paper test\n{RISK_LINE}",
                    telegram)
@@ -206,6 +211,17 @@ def run(telegram: bool) -> bool:
         changed = True
     save_state(st)
     return True
+
+
+def pillars(row, price: float, c: dict) -> str:
+    """The small-cap momentum '5 pillars' checklist for an alert (info only)."""
+    shares = (c.get("mcap") or 0) / price if price else 0
+    checks = [("RVOL≥5x", (row["rvol"] or 0) >= 5), ("vol≥1M sh", row["cum_vol"] >= 1_000_000),
+              ("$1-20", 1 <= price <= 20), ("up≥10%", row["pct"] >= 0.10),
+              ("float≤20M*", 0 < shares <= 20_000_000)]
+    n = sum(ok for _, ok in checks)
+    tag = "⭐ A+ setup" if n == 5 else ("✳️ strong" if n == 4 else "▫️ partial")
+    return f"{tag} {n}/5 pillars: " + " ".join(f"{'✅' if ok else '❌'}{k}" for k, ok in checks) + " (*shares out)"
 
 
 def _daily_ctx(syms, st) -> dict:
@@ -260,7 +276,7 @@ def manage(st, bars, telegram) -> bool:
         if tr is None:
             continue                                               # next bar not closed yet
         if p["status"] == "PENDING":
-            stop0 = tr.entry * (1 - S.STOP_PCT)                          # same rule as simulate()
+            stop0 = S.initial_stop(x, x.index.get_loc(sig), tr.entry)   # same rule as simulate()
             p.update(status="OPEN", entry=round(tr.entry, 4), entry_ts=str(tr.entry_ts), stop_initial=round(stop0, 4))
             p["shares"] = int(EQUITY * RISK_PER_TRADE / max(tr.entry - p["stop_initial"], 0.01))
             changed = True
