@@ -40,7 +40,7 @@ from us_scr import strategy as S
 
 STATE_DIR = os.environ.get("US_SCR_STATE_DIR", os.path.join(D.ROOT, "live_state", "us_scr"))
 MODEL = os.path.join(D.ROOT, "us_scr", "model", "scr_model.joblib")
-V_MAX = int(os.environ.get("SCR_MAX_TRADES_PER_DAY", "10"))   # 10: with the full-day window, 5 were used up by ~11:00 ET
+V_MAX = int(os.environ.get("SCR_MAX_TRADES_PER_DAY", "23"))   # user, 2026-10-06 (was 10; full-day window)
 MAX_WATCH = 80
 VOL_WATCH_RVOL = 5.0
 EQUITY = 100_000.0
