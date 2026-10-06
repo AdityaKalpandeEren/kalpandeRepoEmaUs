@@ -1,0 +1,8 @@
+# Extra packages for the US V5 job only (versions the committed model was trained with).
+lightgbm==4.7.0
+xgboost==3.2.0
+pyarrow>=15
+# pandas 3 changed groupby/copy semantics; US V5 was built and tested on pandas 2.x
+pandas>=2.2,<3
+pyyaml>=6
+lxml>=5

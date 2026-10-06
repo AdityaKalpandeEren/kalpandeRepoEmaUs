@@ -1,0 +1,87 @@
+# US V5.0 - daily cross-sectional swing ranking model for US large caps.
+# Port of the NSE V5.0 design (nse_alert_bot v5/ + swing/). Every number that
+# changes results lives here. Paths are relative to the repo root.
+
+seed: 42
+
+paths:
+  cache: us_v5/cache            # Yahoo daily bars + built panels (git-ignored)
+  results: us_v5/results        # reports, trade logs, research models (git-ignored)
+
+data:
+  start: "2013-01-01"        # features need ~1y warm-up -> first test 2017
+  end: null                  # null = yesterday
+  # market / macro context series (Yahoo). SPY is also the benchmark.
+  context: ["SPY", "QQQ", "IWM", "RSP", "^VIX", "^VIX3M", "^TNX", "DX-Y.NYB", "CL=F", "HYG", "IEF",
+            "XLK", "XLF", "XLE", "XLV", "XLY", "XLI", "XLP", "XLU", "XLB", "XLC", "XLRE"]
+
+universe:
+  # Point-in-time large-cap proxy. Candidate pool = today's S&P 500
+  # constituents (Wikipedia); a stock is eligible only from its S&P 500
+  # "Date added" (no buying future index members early). Each month the
+  # universe is the top-N eligible stocks by trailing median dollar volume.
+  # LIMITATION: Yahoo serves no data for delisted tickers (SIVB, FRC, ATVI
+  # ...), so stocks that LEFT the index are missing -> survivorship bias.
+  # Research therefore also reports an equal-weight portfolio of the same
+  # universe ("ew_universe"); the model must beat that, not just SPY.
+  size: 100
+  value_window: 126          # trading days of median dollar volume
+  min_history: 252           # trading days listed before eligible
+  min_price: 5.0
+  rebuild: monthly
+
+label:
+  horizon: 5                 # rebalance cadence; the V5 target blends 5/10/20 days
+
+features:
+  windows: [5, 10, 21, 63, 126, 252]
+  cross_sectional: true      # add per-day rank of every stock feature
+  drop: []
+
+models:
+  optuna_trials: 12          # per fold, inside the fold's training data only
+  optuna_timeout_s: 150
+  early_stopping_rounds: 50
+
+validation:
+  first_test: "2017-01-01"   # walk-forward test blocks start here
+  refit_months: 12           # retrain every 12 months (expanding window)
+  holdout_start: "2025-07-01"   # untouched until the ONE final evaluation
+  embargo_days: 21           # > the 20-day label: no train label reaches into a test block
+  inner_val_frac: 0.2
+
+portfolio:
+  top_n: 20
+  rebalance_days: 5
+  hold_buffer: 2.5           # keep a holding while its rank <= top_n * buffer (cuts turnover)
+  capital: 100000            # USD paper capital
+  long_short: false
+
+risk:
+  sizing: inverse_vol
+  vol_window: 63
+  max_weight: 0.15
+  max_sector_weight: 0.30
+  max_adv_frac: 0.02
+  dd_breaker: 0.15
+  dd_resume: 0.08
+  regime_filter: false
+
+costs:                       # US cash equity, per side unless stated
+  commission_per_order: 0.0  # zero-commission retail brokers
+  sec_fee: 0.0000278         # Section 31 fee on sells ($27.80 per $1M)
+  finra_taf_per_share: 0.000166
+  finra_taf_cap: 8.30
+  avg_share_price: 150.0     # only used to approximate TAF share counts
+  slippage_bps: 5            # per side at the open (large caps; spread + impact)
+  t1_sale_proceeds_same_day: true
+
+report:
+  risk_free: 0.04            # annual (T-bills), for excess-return Sharpe
+  suspicious_sharpe: 3.0
+  shap_dominance: 0.30
+
+v5:
+  halflife: 5                # EWMA of the daily score rank, sessions
+  seeds: [42, 7, 99]
+  combo_weight_ml: 0.5

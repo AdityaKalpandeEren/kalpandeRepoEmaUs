@@ -9,3 +9,8 @@ backtest/ml/cache/
 backtest/ml/data/dataset_v2.csv
 paper_trading/ml_v2_positions.json
 paper_trading/ml_v2_trades.csv
+
+# US V5 swing: Yahoo bar cache + research outputs (the live model in us_v5/model/ IS committed)
+us_v5/cache/
+us_v5/results/
+.us_v5_done
