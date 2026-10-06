@@ -41,6 +41,7 @@ VOL_SURGE = 2.0
 STOP_PCT = 0.08            # fixed stop below the entry (backtest: bar-low / 5% stops got shaken out by 5-min noise)
 MAX_STOP_PCT = STOP_PCT
 MAX_HOLD_MIN = 180
+PILLAR_RVOL, PILLAR_SHARES, PILLAR_PRICE, PILLAR_FLOAT = 5.0, 1_000_000, (1.0, 20.0), 20_000_000
 PB_LOOKBACK = 6            # bars back to look for the high of day
 PB_MIN_PCT = 0.02          # pullback depth from the high of day
 SLIP_REGULAR = 0.0025
@@ -128,6 +129,20 @@ def pullback_low(h, lo, v, c, i):
     if pl <= hod * (1 - PB_MIN_PCT) and lighter and c[i] > h[i - 1] and c[i] >= hod * 0.97:
         return float(pl)
     return None
+
+
+def five_pillars(rvol: float, cum_vol: float, price: float, pct: float, mcap: float | None) -> list:
+    """The small-cap momentum "5 pillars" that can be measured (the news
+    pillar is read separately, live only): [(name, met), ...].
+    Float has no free history -> shares outstanding (mcap / price) is the
+    proxy (float <= shares outstanding). Backtest 2026-10-06 (pullback
+    setup, 912 trades): 5/5 = +1.57%/trade (both halves positive: +0.49% /
+    +2.62%) vs about -0.5% for every other group - but driven by a few big
+    winners (best +136%, median -6.9%, day-level t 0.38)."""
+    shares = (mcap or 0) / price if price else 0
+    return [("RVOL≥5x", bool(rvol == rvol and rvol >= PILLAR_RVOL)), ("vol≥1M sh", bool(cum_vol >= PILLAR_SHARES)),
+            ("$1-20", bool(PILLAR_PRICE[0] <= price <= PILLAR_PRICE[1])), ("up≥10%", bool(pct >= WATCH_PCT)),
+            ("float≤20M*", bool(0 < shares <= PILLAR_FLOAT))]
 
 
 def initial_stop(x: pd.DataFrame, i: int, entry: float) -> float:

@@ -136,7 +136,11 @@ def main():
     t = build(daily, uni)
     t.to_parquet(os.path.join(OUT, "trades_all.parquet"), index=False)
     log.info("trades: %d over %d days, %d symbols", len(t), t["date"].nunique(), t["symbol"].nunique())
-    rows = [summary(t, "rule: all setups"), summary(t[t.session == "pre"], "rule: pre-market"),
+    px = 10 ** t["log_price"]
+    t["pillars"] = [sum(ok for _, ok in S.five_pillars(float(np.expm1(r.log_rvol)), 10 ** r.log_dollar / p, p, r.pct, 10 ** r.log_mcap))
+                    for r, p in zip(t.itertuples(), px)]
+    rows = [summary(t, "rule: all setups"), summary(t[t.pillars >= 5], "A+ only (5/5 pillars) = LIVE"),
+            summary(t[t.session == "pre"], "rule: pre-market"),
             summary(t[t.session == "regular"], "rule: regular hours"),
             summary(daily_cap(t, 5), "rule: first 5/day")]
     t["pred"] = walk_forward(t)
