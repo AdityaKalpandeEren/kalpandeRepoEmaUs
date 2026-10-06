@@ -50,6 +50,13 @@ def test_live_matches_research():
         assert done.outcome == "EOD"
 
 
+def test_five_pillars():
+    ok = S.five_pillars(rvol=8.0, cum_vol=3e6, price=4.0, pct=0.4, mcap=40e6)       # 10M shares out
+    assert all(m for _, m in ok)
+    bad = dict(S.five_pillars(rvol=float("nan"), cum_vol=5e5, price=25.0, pct=0.12, mcap=2e9))
+    assert not bad["RVOL≥5x"] and not bad["vol≥1M sh"] and not bad["$1-20"] and bad["up≥10%"] and not bad["float≤20M*"]
+
+
 def test_stop_is_structural_and_capped_and_gaps_fill_at_open():
     x = _day(seed=5)
     sig = S.setups(x, S.bar_features(x, 1.8, 50_000))[0]

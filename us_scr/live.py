@@ -16,8 +16,10 @@ Each run (every ~2 min, 07:00-16:10 ET):
      day, >= 2% pullback on lighter volume, reclaim above the previous bar's
      high, above VWAP; 09:35-15:30 ET) -> paper BUY at the next bar's open,
      stop under the pullback low (max 8%), trail under bar lows after +1R.
-     Every alert is tagged with the small-cap "5 pillars" (RVOL >= 5x,
-     >= 1M shares, $1-20, up >= 10%, shares out <= 20M as a float proxy). At most V_MAX trades a day, one
+     Only setups meeting ALL 5 measurable pillars (RVOL >= 5x, >= 1M shares,
+     $1-20, up >= 10%, shares out <= 20M as a float proxy) are paper-traded
+     (SCR_REQUIRE_PILLARS); pillar 3 - news - is read live (Gemini) and shown
+     in the alert, not used as a filter. At most V_MAX trades a day, one
      position per stock. The ML score is shown and logged, NOT used as a
      filter (it did not beat the plain rule out of sample, 2026-10-06).
   4. Exits are re-simulated each run with the SAME function as research
@@ -43,6 +45,7 @@ from us_scr import strategy as S
 
 STATE_DIR = os.environ.get("US_SCR_STATE_DIR", os.path.join(D.ROOT, "live_state", "us_scr"))
 MODEL = os.path.join(D.ROOT, "us_scr", "model", "scr_model.joblib")
+REQUIRE_PILLARS = int(os.environ.get("SCR_REQUIRE_PILLARS", "5"))   # paper-trade only setups meeting this many of the 5
 V_MAX = int(os.environ.get("SCR_MAX_TRADES_PER_DAY", "15"))   # user, 2026-10-06 (tried 5, 10, 23)
 MAX_WATCH = 80
 VOL_WATCH_RVOL = 5.0
@@ -184,6 +187,12 @@ def run(telegram: bool) -> bool:
                 continue
             if ts < x.index[-1] - pd.Timedelta(minutes=10):
                 continue                                           # stale backlog setup - don't trade it late
+            if not c.get("mcap") and sym in set(watch["symbol"]) and "mcap" in watch:
+                m = watch.set_index("symbol").loc[sym, "mcap"]          # new listing: screener market cap
+                c = {**c, "mcap": float(m) if m == m else None}
+            n_pillars = sum(ok for _, ok in pillar_checks(f.loc[ts], float(x.loc[ts, "close"]), c))
+            if n_pillars < REQUIRE_PILLARS:
+                continue                                           # only A+ setups are paper-traded (default 5/5)
             # ML score is shown and logged but NOT used as a filter: it did not
             # beat the plain rule out of sample (2026-10-06, 40 sessions of data).
             score = _score(bundle, f.loc[ts], c, x.loc[ts, "close"], ts)
@@ -194,10 +203,13 @@ def run(telegram: bool) -> bool:
             p = {"symbol": sym, "status": "PENDING", "signal_ts": str(ts), "score": round(float(score), 3),
                  "pct": round(float(row["pct"]) * 100, 1), "rvol": round(float(row["rvol"]), 1) if row["rvol"] == row["rvol"] else None,
                  "mcap": meta.get("mcap") if hasattr(meta, "get") else None}
+            p["pillars"] = n_pillars
+            news = news_line(sym)
+            p["news_score"], p["news_method"] = news[1], news[2]
             st["positions"].append(p)
             notify(f"{HEADER}\n🚀 BUY {sym} ~${float(x.loc[ts, 'close']):.2f} (next 5-min bar open)\n"
                    f"⚡ {p['pct']:+.1f}% today | volume {p['rvol']}x avg | pullback reclaim near the high of day | "
-                   f"mcap {_fmt_money(p['mcap'])}\n{pillars(row, float(x.loc[ts, 'close']), c)}\n"
+                   f"mcap {_fmt_money(p['mcap'])}\n{pillars(row, float(x.loc[ts, 'close']), c)}\n{news[0]}\n"
                    f"🛑 stop ~${stop_hint:.2f} ({(stop_hint / float(x.loc[ts, 'close']) - 1) * 100:+.1f}%, under the pullback low) | trail under bar lows after +1R | "
                    f"max {S.MAX_HOLD_MIN} min, flat 15:55 ET\n🧠 ML score {score:+.2f} (experimental, not a filter) | trade {st['taken']}/{V_MAX} today\n"
                    f"🧪 UNPROVEN strategy - backtest ~0% before costs; forward paper test\n{RISK_LINE}",
@@ -213,12 +225,28 @@ def run(telegram: bool) -> bool:
     return True
 
 
+def news_line(sym: str) -> tuple:
+    """Pillar 3 (catalyst), live only: fresh headlines scored by V2's reader
+    (Gemini, keyword fallback). Shown and logged, NOT a filter - news has no
+    free history, so its effect can only be measured on the paper record."""
+    try:
+        from strategy.news_catalyst import read_catalyst
+        r = read_catalyst(sym)
+    except Exception as e:
+        return f"📰 news: unavailable ({str(e)[:60]})", None, "error"
+    if not r.n_items:
+        return "📰 news: no fresh headline found (pillar 3 ❌ - move may be technical / unannounced)", 0.0, r.method
+    mark = "✅ bullish catalyst" if r.score >= 0.35 else ("⚠️ BEARISH news" if r.score <= -0.35 else "➖ neutral")
+    return (f"📰 news {r.score:+.2f} ({r.method}, {r.n_items} headlines) {mark}: {r.top_headline[:110]}", float(r.score), r.method)
+
+
+def pillar_checks(row, price: float, c: dict) -> list:
+    return S.five_pillars(float(row["rvol"]), float(row["cum_vol"]), price, float(row["pct"]), c.get("mcap"))
+
+
 def pillars(row, price: float, c: dict) -> str:
-    """The small-cap momentum '5 pillars' checklist for an alert (info only)."""
-    shares = (c.get("mcap") or 0) / price if price else 0
-    checks = [("RVOL≥5x", (row["rvol"] or 0) >= 5), ("vol≥1M sh", row["cum_vol"] >= 1_000_000),
-              ("$1-20", 1 <= price <= 20), ("up≥10%", row["pct"] >= 0.10),
-              ("float≤20M*", 0 < shares <= 20_000_000)]
+    """The small-cap momentum '5 pillars' checklist line for an alert."""
+    checks = pillar_checks(row, price, c)
     n = sum(ok for _, ok in checks)
     tag = "⭐ A+ setup" if n == 5 else ("✳️ strong" if n == 4 else "▫️ partial")
     return f"{tag} {n}/5 pillars: " + " ".join(f"{'✅' if ok else '❌'}{k}" for k, ok in checks) + " (*shares out)"
@@ -287,7 +315,8 @@ def manage(st, bars, telegram) -> bool:
                  R=round(tr.R, 2), ret_pct=round(tr.ret_pct, 2), pnl=round(p.get("shares", 0) * (tr.exit - tr.entry), 2))
         _log_trade({"date": st["date"], **{k: p.get(k) for k in ("symbol", "signal_ts", "entry_ts", "entry", "stop_initial",
                                                                   "exit_ts", "exit", "outcome", "R", "ret_pct", "pnl", "score",
-                                                                  "pct", "rvol", "shares")}})
+                                                                  "pct", "rvol", "shares", "pillars", "news_score",
+                                                                  "news_method")}})
         icon = "✅" if tr.R > 0 else "❌"
         mins = int((tr.exit_ts - tr.entry_ts).total_seconds() // 60)
         notify(f"🔥 SCR EXIT {icon} {p['symbol']} ${tr.entry:.2f} -> ${tr.exit:.2f} ({tr.ret_pct:+.1f}%, {tr.R:+.2f}R) "
