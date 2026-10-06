@@ -17,7 +17,7 @@ STOP   fixed STOP_PCT (8%) below the entry - tight next to +-50% swings, but
        time in the backtest). A bar that OPENS below the stop (gap / trading
        halt) exits at that open - small caps can skip straight through a stop.
 WINDOW entries 09:35-15:30 ET (whole regular session - some runners only start in
-       the afternoon; user, 2026-10-06), at most 5 a day.
+       the afternoon; user, 2026-10-06), at most 10 a day (live cap).
 EXIT   after +1R the stop moves to breakeven, then trails under each closed
        bar's low (ride the run, leave when it stalls); out after MAX_HOLD_MIN,
        and flat by 15:55 ET. Slippage again on the exit.
