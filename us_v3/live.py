@@ -297,6 +297,7 @@ def scan_breakouts(st, now, syms, bundle, telegram):
 
 
 def check_exits(st, now, telegram, force_close=False) -> bool:
+    day = st.get("date") or str(now.date())             # the trading day the positions belong to
     lines = []
     for p in st.get("positions", []):
         if p["status"] != "OPEN":
@@ -304,7 +305,7 @@ def check_exits(st, now, telegram, force_close=False) -> bool:
         x = R._closed(D.load(p["symbol"]), now)
         entry_ts = pd.Timestamp(p["entry_ts"])
         after = x[x.index >= entry_ts]
-        after = after[after.index.time < dtime(16, 0)]
+        after = after[(after.index.time < dtime(16, 0)) & (after.index.date == entry_ts.date())]   # its own day only
         side, stop = p["side"], p["stop"]
         exit_px = None
         for ts, b in after.iterrows():
@@ -328,7 +329,7 @@ def check_exits(st, now, telegram, force_close=False) -> bool:
             risk = abs(p["entry"] - stop)
             p["R"] = round((side * (p["exit"] - p["entry"]) - R.SLIP * (p["entry"] + p["exit"])) / risk, 3)
             p["ret_pct"] = round(100 * (side * (p["exit"] / p["entry"] - 1) - 2 * R.SLIP), 3)
-            _log({"date": now.date(), **{k: p[k] for k in ("symbol", "side", "entry", "exit", "stop", "outcome", "R",
+            _log({"date": day, **{k: p[k] for k in ("symbol", "side", "entry", "exit", "stop", "outcome", "R",
                                                            "ret_pct", "pred", "rvol", "entry_ts", "exit_ts")}})
             if p["outcome"] == "STOP":
                 lines.append(f"🛑 {p['symbol']} stopped @ {p['exit']:.2f} ({p['R']:+.2f}R)")
@@ -337,9 +338,11 @@ def check_exits(st, now, telegram, force_close=False) -> bool:
     return bool(lines)
 
 
-def day_report(st, now, telegram):
+def day_report(st, now, telegram, late: bool = False):
     ps = st.get("positions", [])
-    lines = [f"📊 US V3 PAPER RESULT {now.date()} (Stocks-in-Play ORB + ML)"]
+    day = st.get("date") or str(now.date())
+    lines = [f"📊 US V3 PAPER RESULT {day} (Stocks-in-Play ORB + ML)"
+             + (" - LATE: the 16:00 ET close run was missed, positions closed at their stop / 15:55 bar" if late else "")]
     if not ps:
         lines.append("No trades today (no breakout scored above the threshold).")
     for p in ps:
@@ -369,6 +372,16 @@ def day_report(st, now, telegram):
     notify("\n".join(lines), telegram)
 
 
+def recover_missed_close(old: dict, now, telegram) -> None:
+    """Close the previous day's still-open positions at their stop or the
+    15:55 bar (same rules as the live exits, walked over that day's bars),
+    log them to trades.csv and send that day's report, marked LATE."""
+    n_open = sum(p.get("status") == "OPEN" for p in old["positions"])
+    print(f"[US V3] recovering {old['date']}: {len(old['positions'])} positions, {n_open} still open", flush=True)
+    check_exits(old, now, telegram, force_close=True)
+    day_report(old, now, telegram, late=True)
+
+
 def run(telegram: bool, force_retrain: bool = False) -> bool:
     now = datetime.now(ET)
     if now.weekday() >= 5 and not force_retrain:
@@ -376,7 +389,12 @@ def run(telegram: bool, force_retrain: bool = False) -> bool:
         return False
     st = load_state()
     today = str(now.date())
+    leftover = None
     if st.get("date") != today:
+        # A missed close window (GitHub outage on 2026-10-05) used to drop the
+        # previous day's open positions here - keep them for recovery below.
+        if st.get("date") and st.get("positions") and not st.get("reported"):
+            leftover = st
         st = {"date": today}
     mins = now.hour * 60 + now.minute
     syms = symbols()
@@ -398,6 +416,8 @@ def run(telegram: bool, force_retrain: bool = False) -> bool:
         st["prepped"] = True
         changed = True
         print(f"[US V3] prep done in {time.time() - t0:.0f} s", flush=True)
+        if leftover is not None:                          # bars to the previous close are refreshed now
+            recover_missed_close(leftover, now, telegram)
         if force_retrain:
             save_state(st)
             return True
