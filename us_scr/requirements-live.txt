@@ -1,0 +1,5 @@
+# Extra packages for the US SCR (small-cap runners) job only.
+lightgbm==4.7.0
+pyarrow>=15
+# US SCR was built and tested on pandas 2.x (the runner would otherwise get pandas 3).
+pandas>=2.2,<3

@@ -304,3 +304,88 @@ jobs:
           path: live_state/us_v5
           if-no-files-found: ignore
           retention-days: 30
+
+  # US SCR - Small-Cap Runners (us_scr/live.py): dynamic watchlist of listed
+  # small / micro caps moving on volume (free Yahoo screener), "ride the wave"
+  # breakout setups ranked by an ML model, tight stops, paper trades, own 🔥
+  # Telegram format + volume-watch alerts. Same trigger as the scan.
+  scr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: write      # prune this job's old caches (last step)
+    concurrency:
+      group: us-scr
+      cancel-in-progress: false
+    steps:
+      - name: Trading window check (Mon-Fri 07:00-16:15 ET)
+        id: win
+        run: |
+          hhmm=$(TZ=America/New_York date +%H%M); dow=$(TZ=America/New_York date +%u)
+          if [ "$dow" -le 5 ] && [ "$hhmm" -ge 0700 ] && [ "$hhmm" -le 1615 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "outside the US SCR window ($hhmm ET) - nothing to do"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.win.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.win.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - if: steps.win.outputs.run == 'true'
+        run: pip install -r requirements.txt -r us_scr/requirements-live.txt
+
+      - name: Restore US SCR state + bar store
+        if: steps.win.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            live_state/us_scr
+            us_scr/cache
+          key: us-scr-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            us-scr-
+
+      - name: Run US SCR step
+        id: scr
+        if: steps.win.outputs.run == 'true'
+        timeout-minutes: 9
+        run: python -m us_scr.live
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Save US SCR state + bar store
+        if: always() && steps.win.outputs.run == 'true' && steps.scr.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            live_state/us_scr
+            us_scr/cache
+          key: us-scr-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload US SCR trades
+        if: always() && steps.win.outputs.run == 'true' && steps.scr.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-scr-${{ github.run_id }}
+          path: live_state/us_scr
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # This job saves a new cache on most runs - keep only the newest 10.
+      - name: Prune old US SCR caches
+        if: always() && steps.win.outputs.run == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key us-scr- --sort created_at --order desc --limit 100 \
+            --json id,key --jq '.[] | select(.key | startswith("us-scr-")) | .id' \
+            | tail -n +11 | head -n 40 | xargs -r -n1 gh cache delete --repo "$GITHUB_REPOSITORY" || true

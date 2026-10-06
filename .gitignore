@@ -14,3 +14,7 @@ paper_trading/ml_v2_trades.csv
 us_v5/cache/
 us_v5/results/
 .us_v5_done
+
+# US SCR: bar store, universe cache, research outputs (the model in us_scr/model/ IS committed)
+us_scr/cache/
+us_scr/results/
