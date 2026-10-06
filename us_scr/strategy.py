@@ -16,7 +16,8 @@ STOP   fixed STOP_PCT (8%) below the entry - tight next to +-50% swings, but
        outside 5-min noise (bar-low and 5% stops were stopped out ~70% of the
        time in the backtest). A bar that OPENS below the stop (gap / trading
        halt) exits at that open - small caps can skip straight through a stop.
-WINDOW entries 09:35-11:05 ET (first 90 minutes), at most 5 a day.
+WINDOW entries 09:35-15:30 ET (whole regular session - some runners only start in
+       the afternoon; user, 2026-10-06), at most 5 a day.
 EXIT   after +1R the stop moves to breakeven, then trails under each closed
        bar's low (ride the run, leave when it stalls); out after MAX_HOLD_MIN,
        and flat by 15:55 ET. Slippage again on the exit.
@@ -38,7 +39,7 @@ MAX_STOP_PCT = STOP_PCT
 MAX_HOLD_MIN = 180
 SLIP_REGULAR = 0.0025
 SLIP_PRE = 0.005
-PRE_START, REG_START, LAST_ENTRY, FLAT = dtime(7, 0), dtime(9, 35), dtime(11, 5), dtime(15, 55)   # entries: first 90 min
+PRE_START, REG_START, LAST_ENTRY, FLAT = dtime(7, 0), dtime(9, 35), dtime(15, 30), dtime(15, 55)   # entries: whole regular session
 MAX_PER_SYMBOL_DAY = 2
 
 

@@ -13,7 +13,7 @@ Each run (every ~2 min, 07:00-16:10 ET):
      name per day (watch only, no trade).
   3. 5-minute bars (pre-market included) for the list; every NEW setup on a
      closed bar (us_scr/strategy.py: new high of day on >= 2x volume above
-     VWAP, 09:35-11:05 ET) -> paper BUY at the next bar's open, fixed 8%
+     VWAP, 09:35-15:30 ET) -> paper BUY at the next bar's open, fixed 8%
      stop, trail under bar lows after +1R. At most V_MAX trades a day, one
      position per stock. The ML score is shown and logged, NOT used as a
      filter (it did not beat the plain rule out of sample, 2026-10-06).
@@ -40,7 +40,7 @@ from us_scr import strategy as S
 
 STATE_DIR = os.environ.get("US_SCR_STATE_DIR", os.path.join(D.ROOT, "live_state", "us_scr"))
 MODEL = os.path.join(D.ROOT, "us_scr", "model", "scr_model.joblib")
-V_MAX = int(os.environ.get("SCR_MAX_TRADES_PER_DAY", "5"))
+V_MAX = int(os.environ.get("SCR_MAX_TRADES_PER_DAY", "10"))   # 10: with the full-day window, 5 were used up by ~11:00 ET
 MAX_WATCH = 80
 VOL_WATCH_RVOL = 5.0
 EQUITY = 100_000.0

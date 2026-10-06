@@ -7,7 +7,7 @@ Automated version of a "today's top % gainers in small/micro caps" screen. It ru
 |---|---|
 | 🔥 Dynamic watchlist | Free Yahoo screener: **listed** US small/micro caps (< $2B, ≥ $1, no OTC) up ≥ 10% today on volume. Also yesterday's movers (pre-market carry-over) and open positions. Max 80 names, refreshed every run |
 | 📡 Volume watch | Small caps trading ≥ 5x their 10-day average volume while still up < 10% ("suspicious volume before the move"). Watch-only alert, once per name per day, at most hourly |
-| 🚀 Runner trades (paper) | A 5-min bar closes at a new high of day on ≥ 2x bar volume, above VWAP, 09:35–11:05 ET. Buy at the next bar's open, **fixed 8% stop**, breakeven after +1R, then trail under bar lows. Max 3 h hold, flat 15:55. Max 5 a day, one position per stock, 0.5% of $100k paper equity at risk per trade |
+| 🚀 Runner trades (paper) | A 5-min bar closes at a new high of day on ≥ 2x bar volume, above VWAP, 09:35–15:30 ET (whole regular session). Buy at the next bar's open, **fixed 8% stop**, breakeven after +1R, then trail under bar lows. Max 3 h hold, flat 15:55. Max 5 a day, one position per stock, 0.5% of $100k paper equity at risk per trade |
 | 🧠 ML score | LightGBM on the setup's features, **shown and logged but not a filter**: it didn't beat the plain rule out of sample |
 
 Alerts use their own 🔥 / 📡 format and a ⚠️ high-risk line, so they never look like the other strategies.
