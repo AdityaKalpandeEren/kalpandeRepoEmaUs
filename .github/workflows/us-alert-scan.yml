@@ -390,3 +390,83 @@ jobs:
           gh cache list --repo "$GITHUB_REPOSITORY" --key us-scr- --sort created_at --order desc --limit 100 \
             --json id,key --jq '.[] | select(.key | startswith("us-scr-")) | .id' \
             | tail -n +11 | head -n 40 | xargs -r -n1 gh cache delete --repo "$GITHUB_REPOSITORY" || true
+
+  # US LCR - Large-Cap Runners (us_lcr/live.py): mid / large / mega caps
+  # (>= $2B) with unusual volume (free Yahoo screener, time-adjusted volume),
+  # pullback continuation above the 10/30/40/60/180-day EMAs, paper trades,
+  # own 🏛️ Telegram format + volume watch. Same cron-job.org trigger.
+  lcr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: write      # prune this job's old caches (last step)
+    concurrency:
+      group: us-lcr
+      cancel-in-progress: false
+    steps:
+      - name: Trading window check (Mon-Fri 09:30-16:15 ET)
+        id: win
+        run: |
+          hhmm=$(TZ=America/New_York date +%H%M); dow=$(TZ=America/New_York date +%u)
+          if [ "$dow" -le 5 ] && [ "$hhmm" -ge 0930 ] && [ "$hhmm" -le 1615 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "outside the US LCR window ($hhmm ET) - nothing to do"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.win.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.win.outputs.run == 'true'
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - if: steps.win.outputs.run == 'true'
+        run: pip install -r requirements.txt -r us_scr/requirements-live.txt
+
+      - name: Restore US LCR state
+        if: steps.win.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: live_state/us_lcr
+          key: us-lcr-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            us-lcr-
+
+      - name: Run US LCR step
+        id: lcr
+        if: steps.win.outputs.run == 'true'
+        timeout-minutes: 9
+        run: python -m us_lcr.live
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Save US LCR state
+        if: always() && steps.win.outputs.run == 'true' && steps.lcr.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: live_state/us_lcr
+          key: us-lcr-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload US LCR trades
+        if: always() && steps.win.outputs.run == 'true' && steps.lcr.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-lcr-${{ github.run_id }}
+          path: live_state/us_lcr
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Prune old US LCR caches
+        if: always() && steps.win.outputs.run == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key us-lcr- --sort created_at --order desc --limit 100 \
+            --json id,key --jq '.[] | select(.key | startswith("us-lcr-")) | .id' \
+            | tail -n +11 | head -n 40 | xargs -r -n1 gh cache delete --repo "$GITHUB_REPOSITORY" || true
