@@ -9,7 +9,8 @@ Everything on bar t uses data up to the CLOSE of bar t only.
 WATCH  TIME-ADJUSTED volume (by bar t) >= RVOL_MIN x what a normal day has
        traded by that time (a volume shocker; see VOL_CURVE), up >= WATCH_PCT vs the previous close,
        dollar volume today >= MIN_DOLLAR_VOL, above VWAP.
-TREND  EMA_MODE: "none" | "above" (price above all five daily EMAs) |
+TREND  EMA_MODE: "none" | "above10" (price above the 10-day EMA only) |
+       "above" (price above all five daily EMAs) |
        "stacked" (EMA10 > EMA30 > EMA40 > EMA60 > EMA180 and price above EMA10).
 SETUP  SETUP_MODE: "pullback" (recent high of day, pullback on lighter volume,
        reclaim of the previous bar's high) | "hod" (new high of day on
@@ -74,6 +75,8 @@ def ema_ok(price: float, emas: dict, mode: str | None = None) -> bool:
     vals = [emas[f"ema{n}"] for n in EMA_SPANS]
     if mode == "above":
         return all(price > v for v in vals)
+    if mode == "above10":                          # only the short-term trend: price above the 10-day EMA
+        return price > emas["ema10"]
     if mode == "stacked":
         return all(a > b for a, b in zip(vals, vals[1:])) and price > vals[0]
     raise ValueError(mode)

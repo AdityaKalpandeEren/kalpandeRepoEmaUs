@@ -31,7 +31,7 @@ from us_scr import data as SD
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DIR = os.environ.get("US_LCR_STATE_DIR", os.path.join(ROOT, "live_state", "us_lcr"))
-V_MAX = int(os.environ.get("LCR_MAX_TRADES_PER_DAY", "10"))
+V_MAX = int(os.environ.get("LCR_MAX_TRADES_PER_DAY", "13"))   # user, 2026-10-09 (was 10)
 EQUITY, RISK_PER_TRADE = 100_000.0, 0.005
 MAX_WATCH = 80
 VOL_WATCH_X = 3.0
