@@ -6,7 +6,7 @@ The large-cap counterpart of US SCR: **mid ($2–10B), large ($10–200B) and me
 |---|---|
 | 🏛️ Dynamic watchlist | Free Yahoo screener, rebuilt every run: listed stocks with market cap ≥ $2B, up ≥ 2% on volume (plus open positions). Up to 80 names, tagged MID / LARGE / MEGA |
 | Volume shocker | **Time-adjusted** relative volume: volume so far vs what a normal day has traded by this time (U-shaped intraday profile) ≥ 2x, up ≥ 2%, ≥ $20M traded, above VWAP |
-| 📈 EMA trend filter | Price above **all five daily EMAs: 10 / 30 / 40 / 60 / 180-day** (as of the previous close). Every alert shows ✅/❌ for each |
+| 📈 EMA trend rule | **Minimum: price above the 10- and 20-day daily EMAs** (as of the previous close). Every alert shows ✅/❌ for all six (10/20/30/40/60/180). **Above all six = ⭐ PERFECT TRADE** |
 | 🚀 Paper trades | **Pullback continuation**: recent high of day, ≥ 1% pullback on lighter volume, reclaim of the previous bar's high. Buy at the next bar's open (+5 bps), stop under the pullback low (max 3%), breakeven after +1R then trail, max 3 h, flat 15:55. Max 13 a day, 2 per stock, 0.5% risk per trade |
 | 🏛️📡 Volume watch | ≥ 3x 10-day volume while up < 2% (watch only) |
 
@@ -22,4 +22,5 @@ The large-cap counterpart of US SCR: **mid ($2–10B), large ($10–200B) and me
 
 - **Pullback continuation is positive in both halves for every EMA setting,** and the EMA filter lifts it.
 - **HOD breakouts lose.**
+- **10 & 20 EMA minimum rule** (2026-10-09, max 13 a day): +0.32% / +0.10% per trade, 7.9 a day. Its **⭐ PERFECT** part (above all six EMAs) made **+0.35% / +0.24%**; the not-perfect rest made +0.22% / **−0.29%**.
 - **About 290 trades and t 0.3–1.6, so it's not statistically proven yet.** It's a forward paper test.

@@ -9,7 +9,8 @@ Everything on bar t uses data up to the CLOSE of bar t only.
 WATCH  TIME-ADJUSTED volume (by bar t) >= RVOL_MIN x what a normal day has
        traded by that time (a volume shocker; see VOL_CURVE), up >= WATCH_PCT vs the previous close,
        dollar volume today >= MIN_DOLLAR_VOL, above VWAP.
-TREND  EMA_MODE: "none" | "above10" (price above the 10-day EMA only) |
+TREND  EMA_MODE: "none" | "above10" | "min" (LIVE: price above the 10- and
+       20-day EMAs; above ALL six = "PERFECT TRADE") |
        "above" (price above all five daily EMAs) |
        "stacked" (EMA10 > EMA30 > EMA40 > EMA60 > EMA180 and price above EMA10).
 SETUP  SETUP_MODE: "pullback" (recent high of day, pullback on lighter volume,
@@ -43,9 +44,10 @@ MAX_HOLD_MIN = 180
 PB_LOOKBACK, PB_MIN_PCT = 6, 0.01
 REG_START, LAST_ENTRY, FLAT = dtime(9, 35), dtime(15, 30), dtime(15, 55)
 MAX_PER_SYMBOL_DAY = 2
-EMA_SPANS = (10, 30, 40, 60, 180)
+EMA_SPANS = (10, 20, 30, 40, 60, 180)
+MIN_SPANS = (10, 20)            # the minimum trend rule (user, 2026-10-09)
 SETUP_MODE = "pullback"
-EMA_MODE = "above"          # price above all five daily EMAs (chosen 2026-10-08, see below)
+EMA_MODE = "min"            # price above the 10- and 20-day EMAs (user, 2026-10-09); all six = PERFECT
 
 
 @dataclass
@@ -77,9 +79,16 @@ def ema_ok(price: float, emas: dict, mode: str | None = None) -> bool:
         return all(price > v for v in vals)
     if mode == "above10":                          # only the short-term trend: price above the 10-day EMA
         return price > emas["ema10"]
+    if mode == "min":                              # minimum rule: above the 10- and 20-day EMAs
+        return all(price > emas[f"ema{n}"] for n in MIN_SPANS)
     if mode == "stacked":
         return all(a > b for a, b in zip(vals, vals[1:])) and price > vals[0]
     raise ValueError(mode)
+
+
+def is_perfect(price: float, emas: dict) -> bool:
+    """Price above EVERY daily EMA (10/20/30/40/60/180) - flagged PERFECT TRADE."""
+    return bool(emas) and all(price > emas[f"ema{n}"] for n in EMA_SPANS)
 
 
 def ema_tags(price: float, emas: dict) -> str:

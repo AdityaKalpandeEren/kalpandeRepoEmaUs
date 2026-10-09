@@ -181,9 +181,13 @@ def run(telegram: bool) -> bool:
             stop = S.initial_stop(x, x.index.get_loc(ts), close)
             mc = meta.loc[s, "mcap"] if s in meta.index else None
             st["taken"] += 1
+            perfect = S.is_perfect(close, c["emas"])
             st["positions"].append({"symbol": s, "status": "PENDING", "signal_ts": str(ts), "bucket": bucket(mc),
-                                    "pct": round(float(r["pct"]) * 100, 2), "rvol": round(float(r["rvol"]), 1)})
-            notify(f"{HEADER}\n🚀 BUY {s} [{bucket(mc)} {_money(mc)}] ~${close:.2f} (next 5-min bar open)\n"
+                                    "pct": round(float(r["pct"]) * 100, 2), "rvol": round(float(r["rvol"]), 1),
+                                    "perfect": perfect})
+            tag = ("⭐ PERFECT TRADE - above ALL daily EMAs (10/20/30/40/60/180)" if perfect
+                   else "✳️ minimum trend - above the 10 & 20-day EMAs, not all longer ones")
+            notify(f"{HEADER}\n{tag}\n🚀 BUY {s} [{bucket(mc)} {_money(mc)}] ~${close:.2f} (next 5-min bar open)\n"
                    f"⚡ {float(r['pct']) * 100:+.1f}% today | volume {float(r['rvol']):.1f}x normal for this time of day\n"
                    f"📈 daily EMAs: {S.ema_tags(close, c['emas'])}\n"
                    f"🛑 stop ~${stop:.2f} ({(stop / close - 1) * 100:+.1f}%) | trail after +1R | max {S.MAX_HOLD_MIN} min, flat 15:55 ET\n"
@@ -222,7 +226,7 @@ def manage(st, bars, telegram):
         with open(f, "a", newline="") as fh:
             row = {"date": st["date"], **{k: p.get(k) for k in ("symbol", "bucket", "signal_ts", "entry_ts", "entry",
                                                                   "stop_initial", "exit_ts", "exit", "outcome", "R",
-                                                                  "ret_pct", "pnl", "pct", "rvol", "shares")}}
+                                                                  "ret_pct", "pnl", "pct", "rvol", "shares", "perfect")}}
             wr = csv.DictWriter(fh, fieldnames=list(row))
             if new:
                 wr.writeheader()
@@ -238,7 +242,7 @@ def day_report(st, telegram):
     if not ps:
         lines.append("No large-cap runner trade today.")
     for p in ps:
-        lines.append(f"{'✅' if p['R'] > 0 else '❌'} {p['symbol']} [{p['bucket']}]: {p['entry']:.2f} -> {p['exit']:.2f} "
+        lines.append(f"{'✅' if p['R'] > 0 else '❌'}{'⭐' if p.get('perfect') else ''} {p['symbol']} [{p['bucket']}]: {p['entry']:.2f} -> {p['exit']:.2f} "
                      f"({p['ret_pct']:+.2f}%, {p['R']:+.2f}R, {p['outcome']}) ${p['pnl']:+,.0f}")
     if ps:
         lines.append(f"Day: {sum(p['R'] for p in ps):+.2f}R | ${sum(p['pnl'] for p in ps):+,.0f} ({RISK_PER_TRADE * 100:.1f}% risk/trade)")
@@ -247,6 +251,11 @@ def day_report(st, telegram):
         t = pd.read_csv(f)
         lines.append(f"ALL-TIME ({t['date'].nunique()} days, {len(t)} trades): {t['R'].sum():+.2f}R | "
                      f"win {(t['R'] > 0).mean() * 100:.0f}% | ${t['pnl'].sum():+,.0f}")
+        if "perfect" in t:
+            pf = t[t["perfect"].astype(str).str.lower() == "true"]
+            if len(pf):
+                lines.append(f"⭐ PERFECT trades: {len(pf)} | {pf['R'].sum():+.2f}R | win {(pf['R'] > 0).mean() * 100:.0f}% | "
+                             f"other: {len(t) - len(pf)} trades {t['R'].sum() - pf['R'].sum():+.2f}R")
     notify("\n".join(lines), telegram)
 
 

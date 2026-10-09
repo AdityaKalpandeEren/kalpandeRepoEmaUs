@@ -4,7 +4,7 @@ import pandas as pd
 
 from us_lcr import strategy as S
 
-EMAS_UP = {"ema10": 98.0, "ema30": 95.0, "ema40": 94.0, "ema60": 92.0, "ema180": 85.0}
+EMAS_UP = {"ema10": 98.0, "ema20": 96.5, "ema30": 95.0, "ema40": 94.0, "ema60": 92.0, "ema180": 85.0}
 
 
 def _day(seed=0):
@@ -53,6 +53,9 @@ def test_live_matches_research():
 
 def test_ema_filter():
     assert S.ema_ok(100, EMAS_UP, "above") and S.ema_ok(100, EMAS_UP, "stacked")
+    weak_long = {**EMAS_UP, "ema60": 103.0, "ema180": 110.0}       # above 10 & 20, below the long EMAs
+    assert S.ema_ok(100, weak_long, "min") and not S.is_perfect(100, weak_long) and S.is_perfect(100, EMAS_UP)
+    assert not S.ema_ok(100, {**EMAS_UP, "ema20": 101.0}, "min")
     below = {**EMAS_UP, "ema180": 101.0}
     assert not S.ema_ok(100, below, "above") and S.ema_ok(100, below, "none")
     x = _day()
