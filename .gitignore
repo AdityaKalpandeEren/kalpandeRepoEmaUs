@@ -18,3 +18,6 @@ us_v5/results/
 # US SCR: bar store, universe cache, research outputs (the model in us_scr/model/ IS committed)
 us_scr/cache/
 us_scr/results/
+
+# US LCR research data
+us_lcr/cache/
