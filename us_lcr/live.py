@@ -33,6 +33,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DIR = os.environ.get("US_LCR_STATE_DIR", os.path.join(ROOT, "live_state", "us_lcr"))
 V_MAX = int(os.environ.get("LCR_MAX_TRADES_PER_DAY", "13"))   # user, 2026-10-09 (was 10)
 EQUITY, RISK_PER_TRADE = 100_000.0, 0.005
+MAX_POSITION = 0.25          # max notional per trade as a share of EQUITY (a 0.2% stop would otherwise size 2.5x equity)
 MAX_WATCH = 80
 VOL_WATCH_X = 3.0
 HEADER = "🏛️🏛️ LARGE-CAP RUNNER (US LCR) 🏛️🏛️"
@@ -144,6 +145,9 @@ def run(telegram: bool) -> bool:
     st = load_state()
     today = str(now.date())
     if st.get("date") != today:
+        left = [p["symbol"] for p in st.get("positions", []) if p.get("status") in ("PENDING", "OPEN")]
+        if left:
+            notify(f"⚠️ US LCR: {st.get('date')} ended with unclosed paper positions {', '.join(left)} - not booked", telegram)
         st = {"date": today, "positions": [], "last_ts": {}, "taken": 0}
     if mins < 9 * 60 + 30 or st.get("reported"):
         return False
@@ -152,7 +156,9 @@ def run(telegram: bool) -> bool:
         volume_watch(st, telegram)
         st[f"vw_{now.hour}"] = True
     held = [p["symbol"] for p in st["positions"] if p["status"] in ("PENDING", "OPEN")]
-    syms = list(dict.fromkeys(list(w.get("symbol", [])) + held))[:MAX_WATCH]
+    # held positions first: appended last, they were cut off by MAX_WATCH on busy
+    # days and never closed (XPEV / TSLA, 2026-10-09)
+    syms = list(dict.fromkeys(held + list(w.get("symbol", []))))[:max(MAX_WATCH, len(held))]
     ctx = daily_ctx(syms, st)
     meta = w.set_index("symbol") if not w.empty else pd.DataFrame()
     bars = {}
@@ -208,13 +214,18 @@ def manage(st, bars, telegram):
         sig = pd.Timestamp(p["signal_ts"])
         if x is None or sig not in x.index:
             continue
-        tr = S.simulate(p["symbol"], x, sig, final=False)
+        if p["status"] == "PENDING":
+            tr = S.simulate(p["symbol"], x, sig, final=False)
+            if tr is None:
+                continue
+            entry, stop0 = round(tr.entry, 4), round(S.initial_stop(x, x.index.get_loc(sig), tr.entry), 4)
+            p.update(status="OPEN", entry=entry, entry_ts=str(tr.entry_ts), stop_initial=stop0,
+                     shares=max(min(int(EQUITY * RISK_PER_TRADE / max(entry - stop0, 0.01)),
+                                    int(EQUITY * MAX_POSITION / entry)), 1))
+        # exits always use the entry / stop frozen at the fill - the ones it was sized on
+        tr = S.simulate(p["symbol"], x, sig, final=False, entry=p["entry"], stop=p["stop_initial"])
         if tr is None:
             continue
-        if p["status"] == "PENDING":
-            stop0 = S.initial_stop(x, x.index.get_loc(sig), tr.entry)
-            p.update(status="OPEN", entry=round(tr.entry, 4), entry_ts=str(tr.entry_ts), stop_initial=round(stop0, 4),
-                     shares=int(EQUITY * RISK_PER_TRADE / max(tr.entry - stop0, 0.01)))
         if tr.outcome == "OPEN":
             p["stop_now"] = round(tr.stop0, 4)
             continue
@@ -244,6 +255,9 @@ def day_report(st, telegram):
     for p in ps:
         lines.append(f"{'✅' if p['R'] > 0 else '❌'}{'⭐' if p.get('perfect') else ''} {p['symbol']} [{p['bucket']}]: {p['entry']:.2f} -> {p['exit']:.2f} "
                      f"({p['ret_pct']:+.2f}%, {p['R']:+.2f}R, {p['outcome']}) ${p['pnl']:+,.0f}")
+    still = [p["symbol"] for p in st["positions"] if p["status"] in ("PENDING", "OPEN")]
+    if still:
+        lines.append(f"⚠️ not closed (no bars): {', '.join(still)}")
     if ps:
         lines.append(f"Day: {sum(p['R'] for p in ps):+.2f}R | ${sum(p['pnl'] for p in ps):+,.0f} ({RISK_PER_TRADE * 100:.1f}% risk/trade)")
     f = _p("trades.csv")

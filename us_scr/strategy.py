@@ -153,10 +153,13 @@ def initial_stop(x: pd.DataFrame, i: int, entry: float) -> float:
     return max(min(pl, entry * 0.995), entry * (1 - STOP_PCT))
 
 
-def simulate(sym, x: pd.DataFrame, sig_ts: pd.Timestamp, final: bool = True) -> Trade | None:
+def simulate(sym, x: pd.DataFrame, sig_ts: pd.Timestamp, final: bool = True,
+             entry: float | None = None, stop: float | None = None) -> Trade | None:
     """Paper trade for a signal at the close of bar sig_ts (same day only).
     final=False (live): if the bars so far reach no exit, return the trade
-    with outcome OPEN and its current (possibly trailed) stop in stop0."""
+    with outcome OPEN and its current (possibly trailed) stop in stop0.
+    entry / stop (live): the values frozen at the fill - Yahoo revises recent
+    5-min volumes, so recomputing the structural stop later can drift."""
     i = x.index.get_loc(sig_ts)
     if i + 1 >= len(x):
         return None
@@ -164,8 +167,8 @@ def simulate(sym, x: pd.DataFrame, sig_ts: pd.Timestamp, final: bool = True) -> 
     ets = x.index[i + 1]
     if ets.time() >= FLAT:
         return None
-    entry = float(eb["open"]) * (1 + slip(ets))
-    stop = initial_stop(x, i, entry)
+    entry = float(eb["open"]) * (1 + slip(ets)) if entry is None else entry
+    stop = initial_stop(x, i, entry) if stop is None else stop
     risk = entry - stop
     tr = Trade(sym, ets.date(), sig_ts, ets, entry, stop, session="pre" if ets.time() < dtime(9, 30) else "regular")
     best = entry

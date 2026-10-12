@@ -67,3 +67,15 @@ def test_time_adjusted_rvol():
     f = S.bar_features(x, 97.0, 1_500_000)
     early = f.index[3]
     assert f.loc[early, "rvol"] > f.loc[early, "rvol_day"] * 3      # early volume is scaled up by the profile
+
+
+def test_frozen_entry_stop():
+    """Live passes the fill's entry / stop: revised volumes must not move the stop the size was based on."""
+    x = _day(seed=2)
+    sig = _sig(x)[0]
+    base = S.simulate("T", x, sig)
+    y = x.copy()
+    y["volume"] = y["volume"][::-1].to_numpy()               # "revised" volumes
+    frozen = S.simulate("T", y, sig, entry=base.entry, stop=base.stop0)
+    assert frozen.stop0 == base.stop0 and frozen.entry == base.entry
+    assert (frozen.exit_ts, frozen.outcome) == (base.exit_ts, base.outcome)

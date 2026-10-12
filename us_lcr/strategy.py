@@ -170,15 +170,19 @@ def initial_stop(x: pd.DataFrame, i: int, entry: float, mode: str | None = None)
     return max(min(s, entry * 0.998), entry * (1 - STOP_PCT))
 
 
-def simulate(sym, x: pd.DataFrame, sig_ts, final: bool = True, mode: str | None = None) -> Trade | None:
+def simulate(sym, x: pd.DataFrame, sig_ts, final: bool = True, mode: str | None = None,
+             entry: float | None = None, stop: float | None = None) -> Trade | None:
+    """entry / stop (live): the values frozen at the fill. Yahoo revises recent
+    5-min volumes, so recomputing the pullback stop later can give a different
+    stop than the one the position was sized on."""
     i = x.index.get_loc(sig_ts)
     if i + 1 >= len(x):
         return None
     eb, ets = x.iloc[i + 1], x.index[i + 1]
     if ets.time() >= FLAT:
         return None
-    entry = float(eb["open"]) * (1 + SLIP)
-    stop = initial_stop(x, i, entry, mode)
+    entry = float(eb["open"]) * (1 + SLIP) if entry is None else entry
+    stop = initial_stop(x, i, entry, mode) if stop is None else stop
     risk = entry - stop
     tr = Trade(sym, ets.date(), sig_ts, ets, entry, stop)
     best, deadline = entry, ets + pd.Timedelta(minutes=MAX_HOLD_MIN)
