@@ -52,6 +52,7 @@ VOL_WATCH_RVOL = 5.0
 VOL_WATCH_MIN_SHARES = 1_000_000  # "abnormal volume in the millions"
 EQUITY = 100_000.0
 RISK_PER_TRADE = 0.005            # 0.5% of paper equity at risk per trade (tight stops -> small size)
+MAX_POSITION = 0.25               # max notional per trade as a share of EQUITY
 START_MIN, END_MIN = 7 * 60, 16 * 60 + 10
 HEADER = "🔥🔥 SMALL-CAP RUNNER (US SCR) 🔥🔥"
 RISK_LINE = "⚠️ HIGH RISK micro/small cap - no circuit limits, can move ±50% in minutes. Paper only."
@@ -102,7 +103,8 @@ def build_watch(st: dict) -> pd.DataFrame:
     movers = D.screen_live(min_change=S.WATCH_PCT * 100, min_volume=200_000)
     carry = [s for s in st.get("carry", []) if s not in set(movers.get("symbol", []))]
     held = [p["symbol"] for p in st.get("positions", []) if p["status"] in ("PENDING", "OPEN")]
-    names = list(dict.fromkeys(list(movers.get("symbol", [])) + held + carry))[:MAX_WATCH]
+    # held positions first: appended after the movers they could be cut off by MAX_WATCH and never closed
+    names = list(dict.fromkeys(held + list(movers.get("symbol", [])) + carry))[:max(MAX_WATCH, len(held))]
     meta = movers.set_index("symbol") if not movers.empty else pd.DataFrame()
     return pd.DataFrame({"symbol": names}).join(meta, on="symbol") if names else pd.DataFrame(columns=["symbol"])
 
@@ -147,6 +149,9 @@ def run(telegram: bool) -> bool:
     st = load_state()
     today = str(now.date())
     if st.get("date") != today:
+        left = [p["symbol"] for p in st.get("positions", []) if p.get("status") in ("PENDING", "OPEN")]
+        if left:
+            notify(f"⚠️ US SCR: {st.get('date')} ended with unclosed paper positions {', '.join(left)} - not booked", telegram)
         st = {"date": today, "carry": st.get("tomorrow_carry", []), "positions": [], "last_ts": {}, "taken": 0}
     if mins < START_MIN or st.get("reported"):
         return False
@@ -300,14 +305,19 @@ def manage(st, bars, telegram) -> bool:
         sig = pd.Timestamp(p["signal_ts"])
         if sig not in x.index:
             continue
-        tr = S.simulate(p["symbol"], x, sig, final=False)
-        if tr is None:
-            continue                                               # next bar not closed yet
         if p["status"] == "PENDING":
+            tr = S.simulate(p["symbol"], x, sig, final=False)
+            if tr is None:
+                continue                                           # next bar not closed yet
             stop0 = S.initial_stop(x, x.index.get_loc(sig), tr.entry)   # same rule as simulate()
             p.update(status="OPEN", entry=round(tr.entry, 4), entry_ts=str(tr.entry_ts), stop_initial=round(stop0, 4))
-            p["shares"] = int(EQUITY * RISK_PER_TRADE / max(tr.entry - p["stop_initial"], 0.01))
+            p["shares"] = max(min(int(EQUITY * RISK_PER_TRADE / max(p["entry"] - p["stop_initial"], 0.01)),
+                                  int(EQUITY * MAX_POSITION / p["entry"])), 1)
             changed = True
+        # exits always use the entry / stop frozen at the fill (Yahoo revises recent volumes)
+        tr = S.simulate(p["symbol"], x, sig, final=False, entry=p["entry"], stop=p["stop_initial"])
+        if tr is None:
+            continue
         if tr.outcome == "OPEN":
             p["stop_now"] = round(tr.stop0, 4)
             continue
@@ -333,6 +343,9 @@ def day_report(st, telegram) -> None:
     for p in ps:
         lines.append(f"{'✅' if p['R'] > 0 else '❌'} {p['symbol']}: {p['entry']:.2f} -> {p['exit']:.2f} ({p['ret_pct']:+.1f}%, "
                      f"{p['R']:+.2f}R, {p['outcome']}) ${p['pnl']:+,.0f}")
+    still = [p["symbol"] for p in st["positions"] if p["status"] in ("PENDING", "OPEN")]
+    if still:
+        lines.append(f"⚠️ not closed (no bars): {', '.join(still)}")
     if ps:
         lines.append(f"Day: {sum(p['R'] for p in ps):+.2f}R | ${sum(p['pnl'] for p in ps):+,.0f} on ${EQUITY:,.0f} paper "
                      f"({RISK_PER_TRADE * 100:.1f}% risk/trade)")
