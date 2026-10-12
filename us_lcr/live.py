@@ -199,6 +199,11 @@ def run(telegram: bool) -> bool:
                    f"🛑 stop ~${stop:.2f} ({(stop / close - 1) * 100:+.1f}%) | trail after +1R | max {S.MAX_HOLD_MIN} min, flat 15:55 ET\n"
                    f"trade {st['taken']}/{V_MAX} today | {NOTE}", telegram)
     manage(st, bars, telegram)
+    try:                                  # LCR SWING: second paper book on the same fills (us_lcr/swing.py)
+        from us_lcr import swing
+        swing.step(st, now, telegram)
+    except Exception as e:                # never let the swing book break intraday LCR
+        print(f"[LCR SWING] failed: {e!r}", flush=True)
     if mins >= 16 * 60 and not st.get("reported"):
         day_report(st, telegram)
         st["reported"] = True
