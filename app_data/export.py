@@ -69,6 +69,10 @@ RESEARCH_NAMES = {   # code name -> (display name, group, one-line description)
     "L_ML_META_V3": ("ML Meta V3", "ML filters", "V3 meta-filter (trained threshold)"),
 }
 
+# Left out of the app completely - list, totals (day/week/month/all time),
+# open positions - from the first day. App only: the bots still trade them.
+APP_HIDDEN = {"SCORE_ENGINE"}
+
 # US V3 sizes 1R as DAILY_RISK / V3_MAX of a $100k paper account. V3_MAX was 12
 # on 2026-10-01/02 (5% / 12 = 0.42%) and 5 from 2026-10-05 (PR #11: 1%/trade).
 US_V3_EQUITY = 100_000.0
@@ -621,6 +625,7 @@ def cmd_build(a):
                 notes.append(f"{g}: export failed ({type(e).__name__}: {e}) - showing the last good data")
                 print(f"[build] {g} FAILED: {e!r}", file=sys.stderr)
         systems += prev_by_src.get(g, [])
+    systems = [s for s in systems if s.get("code") not in APP_HIDDEN]      # incl. ones carried over from prev
     health = {}
     if a.health and os.path.exists(a.health):
         health = read_json(a.health, {}) or {}
