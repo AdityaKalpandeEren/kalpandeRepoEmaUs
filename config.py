@@ -443,6 +443,19 @@ LIVE_RESEARCH_STRATEGIES = [s.strip() for s in os.getenv(
 # remove it from this default to alert again.
 LIVE_RESEARCH_SILENT_STRATEGIES = [s.strip() for s in os.getenv(
     "LIVE_RESEARCH_SILENT_STRATEGIES", "SCORE_ENGINE").split(",") if s.strip()]
+# Regular-hours gate for the research strategies that still scanned
+# 04:00-20:00 ET (V2/V1.2/V2.2 already have their own gate). Listed
+# strategies only enter on stocks (no =F futures) with the fill between
+# 9:30 and the 15:55 bar, and flatten at the 15:55 close (SESSION_CLOSE)
+# instead of riding thin after-hours prints to 8pm. Backtest Jul 9-Oct 2
+# 2026 (206 symbols, 61 days): SCORE_ENGINE -2696R -> -1833R, L_ML_META
+# -407R -> -302R, K_RSI2 -65R -> -45R; J_VWAP got WORSE (-1267R -> -1465R,
+# the 15:55 flatten cuts its late reversions) so it stays ungated. Fewer
+# losses, still no edge. "" = off (old behaviour).
+RESEARCH_REGULAR_HOURS_STRATEGIES = [s.strip() for s in os.getenv(
+    "RESEARCH_REGULAR_HOURS_STRATEGIES",
+    "K_RSI2_REVERSION,SCORE_ENGINE,L_ML_META",
+).split(",") if s.strip()]
 LIVE_RESEARCH_DIRECTIONS = [d.strip() for d in os.getenv(
     "LIVE_RESEARCH_DIRECTIONS", "long").split(",") if d.strip()]
 LIVE_RESEARCH_TELEGRAM = os.getenv("LIVE_RESEARCH_TELEGRAM", "true").lower() == "true"

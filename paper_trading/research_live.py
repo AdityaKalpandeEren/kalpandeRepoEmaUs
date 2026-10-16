@@ -312,6 +312,9 @@ class ResearchPass:
                 from strategy.market_context import get_context
                 exit_time, exit_price, outcome, exit_idx = simulate_forward_v2(
                     df, fill_idx, t["direction"], entry, t["stop_loss"], t["target"], get_context())
+            elif t["exit_mode"] == "regular":
+                exit_time, exit_price, outcome, exit_idx = simulate_forward_v2(
+                    df, fill_idx, t["direction"], entry, t["stop_loss"], t["target"], None)
             else:
                 exit_time, exit_price, outcome, exit_idx = simulate_forward_directional(
                     df, fill_idx, t["direction"], entry, t["stop_loss"], t["target"])
