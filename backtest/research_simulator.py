@@ -85,6 +85,10 @@ def simulate_day_research(symbol: str, day_df: pd.DataFrame, candle_minutes: int
                 exit_time, exit_price, outcome, exit_idx = simulate_forward_v2(
                     day_df, fill_idx, sig.direction, entry_price, sig.stop_loss, sig.target,
                     get_context())
+            elif getattr(sig, "exit_mode", "standard") == "regular":
+                # V2's exit without the market-shock check: flat at the 15:55 close.
+                exit_time, exit_price, outcome, exit_idx = simulate_forward_v2(
+                    day_df, fill_idx, sig.direction, entry_price, sig.stop_loss, sig.target, None)
             else:
                 exit_time, exit_price, outcome, exit_idx = simulate_forward_directional(
                     day_df, fill_idx, sig.direction, entry_price, sig.stop_loss, sig.target

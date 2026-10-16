@@ -952,6 +952,21 @@ def evaluate_all(symbol: str, df: pd.DataFrame, models: dict = None,
                 sig = fn(symbol, df, direction, regime)
             except Exception:
                 continue
+            if sig and sig.strategy in config.RESEARCH_REGULAR_HOURS_STRATEGIES:
+                sig = _regular_hours_only(symbol, df, sig)
             if sig:
                 out.append(sig)
     return out
+
+
+def _regular_hours_only(symbol: str, df: pd.DataFrame, sig):
+    """config.RESEARCH_REGULAR_HOURS_STRATEGIES: stocks only, fill (next
+    candle) inside the regular session before the 15:55 flatten bar, and
+    exit_mode "regular" = flat at the 15:55 close (SESSION_CLOSE)."""
+    from strategy.market_context import minutes_since_open
+    if symbol.endswith("=F"):
+        return None
+    fill_mso = minutes_since_open(df.iloc[-1]["timestamp"]) + config.CANDLE_INTERVAL_MINUTES
+    if not 0 <= fill_mso < config.ML_V2_FLAT_MIN:
+        return None
+    return replace(sig, exit_mode="regular")
