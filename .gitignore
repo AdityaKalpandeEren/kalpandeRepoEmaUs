@@ -21,3 +21,7 @@ us_scr/results/
 
 # US LCR research data
 us_lcr/cache/
+
+# US V8 research data + outputs
+us_v8/cache/
+us_v8/results/
